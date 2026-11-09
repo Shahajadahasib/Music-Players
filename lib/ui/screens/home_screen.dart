@@ -128,7 +128,7 @@ class HomeScreen extends ConsumerWidget {
         child: EmptyState(
           icon: Icons.wifi_off_rounded,
           title: 'Can’t reach the music services',
-          message: 'Check your connection. Your library and downloaded local files still work.',
+          message: 'Check your connection. Your library and files on this device still work.',
           actionLabel: 'Try again',
           onAction: () => ref.invalidate(featuredProvider),
         ),

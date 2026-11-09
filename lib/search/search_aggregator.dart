@@ -128,7 +128,11 @@ class SearchAggregator {
         }
       }
       return r;
-    }).whenComplete(() => _inFlight.remove(key));
+    }).whenComplete(() {
+      // Block body: returning the removed Future would make whenComplete
+      // wait on itself.
+      _inFlight.remove(key);
+    });
   }
 
   Future<AggregatedSearchResult> _search(
