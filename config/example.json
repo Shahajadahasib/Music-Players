@@ -1,0 +1,17 @@
+{
+  "APP_NAME": "Aurora Music",
+  "AUDIUS_APP_NAME": "aurora-music-player",
+  "ITUNES_COUNTRY": "US",
+  "ITUNES_METADATA": true,
+  "ITUNES_PREVIEWS": false,
+  "INTERNET_ARCHIVE": true,
+  "JAMENDO_COMMERCIAL_AGREEMENT": false,
+  "JAMENDO_CLIENT_ID": "",
+  "LICENSING_MODE": "freemium",
+  "PREMIUM_PRODUCT_ID": "premium_lifetime",
+  "LICENSE_PUBLIC_KEY": "",
+  "LICENSE_SERVER_URL": "",
+  "WEB_CHECKOUT_URL": "",
+  "PRIVACY_POLICY_URL": "",
+  "SUPPORT_EMAIL": ""
+}

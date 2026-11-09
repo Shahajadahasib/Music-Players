@@ -1,11 +1,11 @@
 {
-    "name": "music_player_app",
-    "short_name": "music_player_app",
+    "name": "Aurora Music",
+    "short_name": "Aurora",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0B0B10",
+    "theme_color": "#6C7BFF",
+    "description": "Search once, play the best authorised source.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

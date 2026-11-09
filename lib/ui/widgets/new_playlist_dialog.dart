@@ -26,6 +26,7 @@ class _NewPlaylistDialogState extends State<NewPlaylistDialog> {
       content: TextField(
         controller: _controller,
         autofocus: true,
+        maxLength: 100,
         decoration: const InputDecoration(hintText: 'Playlist name'),
         onSubmitted: (value) => Navigator.pop<String?>(context, value),
       ),

@@ -64,6 +64,16 @@ void main() {
       );
 
   group('LicenseKeyCodec', () {
+    test('verifies keys issued by the licence server (shared test vector)', () async {
+      // Same TEST-ONLY vector as server/test/server_test.dart.
+      const pk = 'iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=';
+      const key = 'AURORA1.eyJsaWQiOiJsaWNfdGVzdF92ZWN0b3IiLCJwcmQiOiJwcmVtaXVtX2xpZmV0aW1lIiwiaWF0IjoxNzY3MjI1NjAwfQ'
+          '.vhfV3kds2FzsG3Xhwteb8uQhbafQZebM_XKeRng_IdaVpdIWT9lVrn8FCes9OqNiJhfz82EUfkrOo6czU7ObDg';
+      final p = await LicenseKeyCodec.verify(key, publicKeyBase64: pk, expectedProduct: 'premium_lifetime');
+      expect(p?.licenseId, 'lic_test_vector');
+      expect(p?.issuedAt, DateTime.utc(2026, 1, 1));
+    });
+
     test('round-trips a signed key', () async {
       final key = await issue();
       final p = await LicenseKeyCodec.verify(key, publicKeyBase64: publicKey, expectedProduct: 'premium_lifetime');
