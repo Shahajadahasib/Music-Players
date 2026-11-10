@@ -1,9 +1,11 @@
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 
 import '../models/song.dart';
 
-/// Thrown when [play] or [setQueue] receives a URL that cannot be played.
+/// Thrown when a song has no usable audio URL.
 class AudioUrlException implements Exception {
   const AudioUrlException(this.message);
 
@@ -13,132 +15,138 @@ class AudioUrlException implements Exception {
   String toString() => message;
 }
 
-/// Singleton façade over **one** [AudioPlayer] ([just_audio]).
+/// Singleton façade over the app's **single** [AudioPlayer].
 ///
-/// **Streams**
-/// [durationStream], [positionStream], and [playerStateStream] are each wrapped
-/// with a single [Stream.asBroadcastStream] so every consumer shares the same
-/// broadcast fan-out instead of re-wrapping on each getter access.
-///
-/// **Playback**
-/// - [play] — serialized; overlapping calls are ignored while a load is in
-///   progress to avoid stacked [AudioPlayer.play] invocations.
-/// - [resume] — no-op if already playing.
+/// * Every source carries a [MediaItem] tag so `just_audio_background` can
+///   drive the Android notification, iOS lock screen / Control Center, the
+///   browser Media Session, Bluetooth and headset buttons.
+/// * `handleInterruptions` (default) makes just_audio pause on phone calls /
+///   focus loss, duck for navigation prompts, resume afterwards, and pause
+///   when headphones are unplugged ("becoming noisy").
 class AudioService {
-  AudioService._internal() : _player = AudioPlayer() {
-    // One broadcast wrapper per underlying stream — stable identity for
-    // multiple listeners without duplicating native subscriptions.
-    _durationStream = _player.durationStream.asBroadcastStream();
-    _positionStream = _player.positionStream.asBroadcastStream();
-    _playerStateStream = _player.playerStateStream.asBroadcastStream();
-  }
+  AudioService._internal()
+      : _player = AudioPlayer(
+          // Load the next track ahead of time → near-gapless transitions.
+          useLazyPreparation: true,
+          audioLoadConfiguration: const AudioLoadConfiguration(
+            androidLoadControl: AndroidLoadControl(
+              // Start quickly (1.5 s buffered) but keep a 50 s cushion.
+              bufferForPlaybackDuration: Duration(milliseconds: 1500),
+              bufferForPlaybackAfterRebufferDuration: Duration(seconds: 4),
+              maxBufferDuration: Duration(seconds: 50),
+            ),
+            darwinLoadControl: DarwinLoadControl(
+              automaticallyWaitsToMinimizeStalling: true,
+              preferredForwardBufferDuration: Duration(seconds: 30),
+            ),
+          ),
+        );
 
   static final AudioService instance = AudioService._internal();
 
   final AudioPlayer _player;
   bool _isInitialized = false;
 
-  /// True while [play] is running [setAudioSource] + [play] to block re-entry.
-  bool _playOperationInProgress = false;
+  /// Directory holding imported local files (mobile). Set at startup.
+  static String? localMusicDir;
 
-  late final Stream<Duration?> _durationStream;
-  late final Stream<Duration> _positionStream;
-  late final Stream<PlayerState> _playerStateStream;
+  /// Web-only: in-memory data URIs for files picked this session.
+  static final Map<String, Uri> webLocalUris = {};
 
-  /// The single app-wide player — do not construct another [AudioPlayer].
   AudioPlayer get player => _player;
 
-  /// Broadcast stream — safe for multiple listeners without extra wrapping.
-  Stream<Duration?> get durationStream => _durationStream;
-
-  /// Broadcast stream — safe for multiple listeners without extra wrapping.
-  Stream<Duration> get positionStream => _positionStream;
-
-  /// Broadcast stream — safe for multiple listeners without extra wrapping.
-  Stream<PlayerState> get playerStateStream => _playerStateStream;
+  Stream<Duration?> get durationStream => _player.durationStream;
+  Stream<Duration> get positionStream => _player.positionStream;
+  Stream<PlayerState> get playerStateStream => _player.playerStateStream;
 
   Future<void> initialize() async {
-    if (_isInitialized) {
-      return;
-    }
-
+    if (_isInitialized) return;
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
     _isInitialized = true;
   }
 
-  /// Loads [url] as the only source and starts playback.
-  ///
-  /// Re-entrant calls while a previous [play] is still running are ignored so
-  /// [AudioPlayer.play] is not invoked in duplicate for overlapping taps.
-  Future<void> play(String url) async {
-    if (_playOperationInProgress) {
-      return;
-    }
-    _playOperationInProgress = true;
-    try {
-      await _player.setAudioSource(_audioSourceFromUrl(url));
-      await _player.play();
-    } finally {
-      _playOperationInProgress = false;
-    }
-  }
-
   Future<void> pause() => _player.pause();
 
-  /// Resumes playback; does **not** call [AudioPlayer.play] if already playing.
   Future<void> resume() async {
-    if (_player.playing) {
-      return;
-    }
+    if (_player.playing) return;
     await _player.play();
   }
 
-  Future<void> seek(Duration position) => _player.seek(position);
+  Future<void> seek(Duration position, {int? index}) =>
+      _player.seek(position, index: index);
 
-  /// Replaces the current source with a queue of Jamendo (or any HTTP) URLs.
   Future<void> setQueue({
     required List<Song> songs,
     int initialIndex = 0,
     Duration initialPosition = Duration.zero,
     bool preload = true,
   }) async {
-    if (songs.isEmpty) {
-      return;
-    }
-
-    final sources = songs.map(_songToAudioSource).toList(growable: false);
-    // ignore: deprecated_member_use — queue API until migrated to setAudioSources
-    final queue = ConcatenatingAudioSource(children: sources);
-    await _player.setAudioSource(
-      queue,
+    if (songs.isEmpty) return;
+    await _player.setAudioSources(
+      songs.map(audioSourceFor).toList(growable: false),
       initialIndex: initialIndex.clamp(0, songs.length - 1),
       initialPosition: initialPosition,
       preload: preload,
     );
   }
 
-  AudioSource _songToAudioSource(Song song) {
-    return _audioSourceFromUrl(song.audioUrl, tag: song);
+  Future<void> insert(int index, Song song) =>
+      _player.insertAudioSource(index, audioSourceFor(song));
+
+  Future<void> add(Song song) => _player.addAudioSource(audioSourceFor(song));
+
+  Future<void> removeAt(int index) => _player.removeAudioSourceAt(index);
+
+  Future<void> move(int from, int to) => _player.moveAudioSource(from, to);
+
+  /// Replaces the source at [index] (used when falling back to another
+  /// provider for the same song).
+  Future<void> replace(int index, Song song) async {
+    await _player.insertAudioSource(index + 1, audioSourceFor(song));
+    await _player.removeAudioSourceAt(index);
   }
 
-  AudioSource _audioSourceFromUrl(String url, {Object? tag}) {
-    final uri = Uri.tryParse(url);
-    if (uri == null ||
-        !uri.hasScheme ||
-        uri.host.isEmpty ||
-        (uri.scheme != 'https' && uri.scheme != 'http')) {
-      throw const AudioUrlException(
-        'Invalid audio URL. Use a complete HTTP/HTTPS URL.',
-      );
-    }
-
+  /// Builds the audio source for [song], tagged for system media controls.
+  static AudioSource audioSourceFor(Song song) {
+    final uri = uriFor(song);
+    final tag = MediaItem(
+      id: song.id,
+      title: song.title.isEmpty ? 'Unknown title' : song.title,
+      artist: song.artist.isEmpty ? null : song.artist,
+      album: song.album.isEmpty ? null : song.album,
+      duration: song.isPreview ? null : song.duration,
+      artUri: song.coverUrl.startsWith('https://') ? Uri.parse(song.coverUrl) : null,
+      extras: {'sourceId': song.sourceId},
+    );
     return AudioSource.uri(uri, tag: tag);
   }
 
-  /// Releases native player resources. Call only on app shutdown or tests —
-  /// the singleton must not be used after this.
-  Future<void> disposePlayer() async {
-    await _player.dispose();
+  static Uri uriFor(Song song) {
+    if (!song.canPlay) {
+      throw const AudioUrlException('This track is not available to stream.');
+    }
+    if (song.isLocal) {
+      if (kIsWeb) {
+        final u = webLocalUris[song.id];
+        if (u != null) return u;
+        throw const AudioUrlException(
+          'Local files on the web must be re-opened each session.',
+        );
+      }
+      const prefix = 'local-file:';
+      if (song.audioUrl.startsWith(prefix) && localMusicDir != null) {
+        return Uri.file('$localMusicDir/${song.audioUrl.substring(prefix.length)}');
+      }
+    }
+    final uri = Uri.tryParse(song.audioUrl);
+    if (uri == null ||
+        uri.host.isEmpty ||
+        (uri.scheme != 'https' && uri.scheme != 'http')) {
+      throw const AudioUrlException('This track has no valid audio stream.');
+    }
+    return uri;
   }
+
+  Future<void> disposePlayer() => _player.dispose();
 }

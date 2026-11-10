@@ -14,6 +14,12 @@ class HiveStorageService {
   static const String playlistsBoxName = 'playlists_box';
   static const String userDataBoxName = 'user_data_box';
   static const String userDataKey = 'user_data';
+  static const String settingsBoxName = 'settings_box';
+  static const String historyBoxName = 'history_box';
+  static const String matchMemoryBoxName = 'match_memory_box';
+
+  /// Maximum playback-history entries kept on device.
+  static const int historyLimit = 500;
 
   /// Legacy placeholder tracks from an earlier app version (see git history).
   static const Set<String> _legacyDemoSongIds = {'s1', 's2', 's3', 's4'};
@@ -30,6 +36,9 @@ class HiveStorageService {
       Hive.openBox<Song>(songsBoxName),
       Hive.openBox<Playlist>(playlistsBoxName),
       Hive.openBox<UserData>(userDataBoxName),
+      Hive.openBox<dynamic>(settingsBoxName),
+      Hive.openBox<Map<dynamic, dynamic>>(historyBoxName),
+      Hive.openBox<String>(matchMemoryBoxName),
     ]);
 
     await _clearLegacyDemoSongsIfNeeded();
@@ -221,6 +230,81 @@ class HiveStorageService {
         lastPosition: position,
       ),
     );
+  }
+
+  // ── Settings (small key/value store) ──────────────────────────────────────
+
+  static Box<dynamic> get _settingsBox => Hive.box<dynamic>(settingsBoxName);
+
+  static T? readSetting<T>(String key) {
+    final v = _settingsBox.get(key);
+    return v is T ? v : null;
+  }
+
+  static Future<void> writeSetting(String key, Object? value) =>
+      value == null ? _settingsBox.delete(key) : _settingsBox.put(key, value);
+
+  // ── Playback history ──────────────────────────────────────────────────────
+
+  static Box<Map<dynamic, dynamic>> get _historyBox =>
+      Hive.box<Map<dynamic, dynamic>>(historyBoxName);
+
+  static ValueListenable<Box<Map<dynamic, dynamic>>> historyListenable() =>
+      _historyBox.listenable();
+
+  /// Appends a play event (most recent last) and trims to [historyLimit].
+  static Future<void> addHistory(String songId, DateTime playedAt) async {
+    await _historyBox.add({'id': songId, 'at': playedAt.millisecondsSinceEpoch});
+    final overflow = _historyBox.length - historyLimit;
+    if (overflow > 0) {
+      await _historyBox.deleteAll(_historyBox.keys.take(overflow).toList());
+    }
+  }
+
+  /// Most-recent-first list of (song, playedAt). Skips songs no longer stored.
+  static List<({Song song, DateTime playedAt})> getHistory({int? limit}) {
+    final out = <({Song song, DateTime playedAt})>[];
+    for (final e in _historyBox.values.toList().reversed) {
+      final song = _songsBox.get(e['id']);
+      final at = e['at'];
+      if (song == null || at is! int) continue;
+      out.add((song: song, playedAt: DateTime.fromMillisecondsSinceEpoch(at)));
+      if (limit != null && out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /// Distinct recently played songs, most recent first.
+  static List<Song> getRecentlyPlayed({int limit = 20}) {
+    final seen = <String>{};
+    final out = <Song>[];
+    for (final e in getHistory()) {
+      if (seen.add(e.song.id)) out.add(e.song);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  static Future<void> clearHistory() => _historyBox.clear();
+
+  // ── Match memory ──────────────────────────────────────────────────────────
+
+  static String? lookupMatch(String key) =>
+      Hive.box<String>(matchMemoryBoxName).get(key);
+
+  static Future<void> rememberMatch(String key, String songId) =>
+      Hive.box<String>(matchMemoryBoxName).put(key, songId);
+
+  /// Erases everything stored on this device (Settings → Delete my data).
+  static Future<void> clearAllUserData() async {
+    await Future.wait([
+      _songsBox.clear(),
+      _playlistsBox.clear(),
+      _historyBox.clear(),
+      _settingsBox.clear(),
+      Hive.box<String>(matchMemoryBoxName).clear(),
+    ]);
+    await _userDataBox.put(userDataKey, const UserData(favorites: []));
   }
 
   static void _registerAdapters() {

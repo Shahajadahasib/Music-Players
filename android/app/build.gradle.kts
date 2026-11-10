@@ -38,22 +38,32 @@ android {
         versionName = flutter.versionName
     }
 
-    // ✅ CORRECT PLACE
+    // Release signing is read from android/key.properties (never committed).
+    // When it is missing (CI, contributors) release builds fall back to the
+    // debug key so `flutter build apk --release` still works locally; such
+    // builds must NOT be uploaded to Google Play.
+    val hasReleaseKeystore = keystorePropertiesFile.exists()
+
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            storeFile = file("upload-keystore.jks")
-            storePassword = keystoreProperties["storePassword"] as String
+        if (hasReleaseKeystore) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String? ?: "upload-keystore.jks")
+                storePassword = keystoreProperties["storePassword"] as String
+            }
         }
     }
 
-    // ✅ CORRECT PLACE
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

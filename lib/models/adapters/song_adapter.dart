@@ -2,7 +2,19 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import '../song.dart';
 
+/// Binary layout:
+///
+/// v1 (original app): id, title, artist, album, audioUrl, coverUrl,
+///                    hasDuration, [durationMs]
+/// v2 (appended):     schemaVersion(=2), sourceId, playabilityIndex,
+///                    externalUrl, license, artistId, albumId
+///
+/// Hive bounds each frame, so a v1 record simply has no bytes left after the
+/// duration and is read with v2 defaults (an Audius full-track stream, which
+/// is what the original app stored).
 class SongAdapter extends TypeAdapter<Song> {
+  static const int _schemaVersion = 2;
+
   @override
   final int typeId = 0;
 
@@ -17,7 +29,7 @@ class SongAdapter extends TypeAdapter<Song> {
     final hasDuration = reader.readBool();
     final duration = hasDuration ? Duration(milliseconds: reader.readInt()) : null;
 
-    return Song(
+    var song = Song(
       id: id,
       title: title,
       artist: artist,
@@ -26,6 +38,29 @@ class SongAdapter extends TypeAdapter<Song> {
       coverUrl: coverUrl,
       duration: duration,
     );
+
+    if (reader.availableBytes > 0) {
+      final version = reader.readByte();
+      if (version >= 2) {
+        final sourceId = reader.readString();
+        final playabilityIndex = reader.readByte();
+        final externalUrl = reader.readString();
+        final license = reader.readString();
+        final artistId = reader.readString();
+        final albumId = reader.readString();
+        song = song.copyWith(
+          sourceId: sourceId,
+          playability: playabilityIndex < Playability.values.length
+              ? Playability.values[playabilityIndex]
+              : Playability.none,
+          externalUrl: externalUrl,
+          license: license,
+          artistId: artistId,
+          albumId: albumId,
+        );
+      }
+    }
+    return song;
   }
 
   @override
@@ -40,5 +75,12 @@ class SongAdapter extends TypeAdapter<Song> {
     if (obj.duration != null) {
       writer.writeInt(obj.duration!.inMilliseconds);
     }
+    writer.writeByte(_schemaVersion);
+    writer.writeString(obj.sourceId);
+    writer.writeByte(obj.playability.index);
+    writer.writeString(obj.externalUrl);
+    writer.writeString(obj.license);
+    writer.writeString(obj.artistId);
+    writer.writeString(obj.albumId);
   }
 }

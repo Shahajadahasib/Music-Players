@@ -1,5 +1,8 @@
 package com.example.music_player_app
 
-import io.flutter.embedding.android.FlutterActivity
+import com.ryanheise.audioservice.AudioServiceActivity
 
-class MainActivity : FlutterActivity()
+// AudioServiceActivity keeps the Flutter engine shared with the background
+// audio service so playback, notification and lock-screen controls survive
+// the activity being backgrounded.
+class MainActivity : AudioServiceActivity()

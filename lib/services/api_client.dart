@@ -1,118 +1,121 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-/// A thin, reusable HTTP wrapper used by services that need structured JSON
-/// responses (e.g. [JamendoService] or future endpoints).
+/// Small JSON-over-HTTP client shared by all music sources.
 ///
-/// Some services make raw `http` calls for full control over query parameters.
-/// This client exists for endpoints that don't need custom per-call auth logic,
-/// and as a centralised place to adjust timeouts, logging, or retry strategy.
-///
-/// ## Error handling contract
-///
-/// All methods throw an [ApiException] when:
-///   - A network-level error occurs (socket, DNS, timeout).
-///   - The HTTP status code is not in the 2xx range.
-///   - The response body cannot be decoded as JSON.
-///
-/// Callers catch [ApiException] and translate it into user-facing messages.
+/// * Per-request timeout so one slow provider cannot stall search.
+/// * One retry with back-off for transient failures (5xx / network), never for
+///   4xx — retrying a 429 immediately only makes rate limiting worse.
+/// * Injectable [http.Client] so tests run against `MockClient` without
+///   touching the network.
 class ApiClient {
-  const ApiClient({http.Client? client}) : _client = client;
+  ApiClient({
+    http.Client? client,
+    this.timeout = const Duration(seconds: 8),
+    this.retries = 1,
+  }) : _client = client ?? http.Client();
 
-  /// Allows injecting a mock client in tests. Defaults to the global http
-  /// functions when null.
-  final http.Client? _client;
+  final http.Client _client;
+  final Duration timeout;
+  final int retries;
 
-  // ── GET ───────────────────────────────────────────────────────────────────
-
-  /// Sends a GET request and returns the decoded JSON body.
-  ///
-  /// [uri]     — the fully-formed request URI, including query parameters.
-  /// [headers] — optional HTTP headers (e.g. `Authorization: Bearer …`).
   Future<Map<String, dynamic>> get(
     Uri uri, {
     Map<String, String>? headers,
   }) async {
-    final http.Response response;
-    try {
-      response = _client != null
-          ? await _client.get(uri, headers: headers)
-          : await http.get(uri, headers: headers);
-    } on Exception catch (e) {
-      throw ApiException('Network error on GET $uri — $e');
+    final decoded = await getJson(uri, headers: headers);
+    if (decoded is! Map<String, dynamic>) {
+      throw const ApiException('Expected a JSON object.');
     }
+    return decoded;
+  }
+
+  Future<Object?> getJson(Uri uri, {Map<String, String>? headers}) async {
+    final response = await _send(() => _client.get(uri, headers: headers));
     return _decode(response);
   }
 
-  // ── POST ──────────────────────────────────────────────────────────────────
-
-  /// Sends a POST request and returns the decoded JSON body.
-  ///
-  /// [uri]     — the request URI.
-  /// [headers] — optional HTTP headers (Content-Type is set here when needed).
-  /// [body]    — the raw request body (typically
-  ///             `application/x-www-form-urlencoded` for OAuth2 token calls).
   Future<Map<String, dynamic>> post(
     Uri uri, {
     Map<String, String>? headers,
     Object? body,
   }) async {
-    final http.Response response;
-    try {
-      response = _client != null
-          ? await _client.post(uri, headers: headers, body: body)
-          : await http.post(uri, headers: headers, body: body);
-    } on Exception catch (e) {
-      throw ApiException('Network error on POST $uri — $e');
+    final response =
+        await _send(() => _client.post(uri, headers: headers, body: body));
+    final decoded = _decode(response);
+    if (decoded is! Map<String, dynamic>) {
+      throw const ApiException('Expected a JSON object.');
     }
-    return _decode(response);
+    return decoded;
   }
 
-  // ── Decoding + status validation ──────────────────────────────────────────
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    var attempt = 0;
+    while (true) {
+      try {
+        final response = await request().timeout(timeout);
+        final transient = response.statusCode >= 500;
+        if (transient && attempt < retries) {
+          attempt++;
+          await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+          continue;
+        }
+        return response;
+      } on TimeoutException {
+        if (attempt < retries) {
+          attempt++;
+          continue;
+        }
+        throw const ApiException('Request timed out.', isNetwork: true);
+      } on ApiException {
+        rethrow;
+      } catch (e) {
+        if (attempt < retries) {
+          attempt++;
+          await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+          continue;
+        }
+        throw ApiException('Network error: $e', isNetwork: true);
+      }
+    }
+  }
 
-  Map<String, dynamic> _decode(http.Response response) {
+  Object? _decode(http.Response response) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(
-        'HTTP ${response.statusCode} — ${response.reasonPhrase ?? 'Unknown'}: '
-        '${_truncate(response.body)}',
+        'HTTP ${response.statusCode}: ${_truncate(response.body)}',
         statusCode: response.statusCode,
       );
     }
-
     if (response.body.isEmpty) {
       throw const ApiException('Received an empty response body.');
     }
-
     try {
-      final decoded = jsonDecode(response.body);
-      if (decoded is! Map<String, dynamic>) {
-        throw const ApiException('Expected a JSON object but got a different type.');
-      }
-      return decoded;
+      return jsonDecode(utf8.decode(response.bodyBytes));
     } on FormatException catch (e) {
       throw ApiException('Failed to decode JSON: $e');
     }
   }
 
-  /// Keeps error messages readable when the server returns a large HTML body.
   static String _truncate(String text, {int maxLength = 200}) =>
       text.length <= maxLength ? text : '${text.substring(0, maxLength)}…';
-}
 
-// ── Exception ─────────────────────────────────────────────────────────────────
+  void close() => _client.close();
+}
 
 /// Thrown by [ApiClient] for any network, HTTP, or JSON error.
 class ApiException implements Exception {
-  const ApiException(this.message, {this.statusCode});
+  const ApiException(this.message, {this.statusCode, this.isNetwork = false});
 
   final String message;
-
-  /// The HTTP status code if the error was a non-2xx response; otherwise null.
   final int? statusCode;
+  final bool isNetwork;
 
   bool get isUnauthorized => statusCode == 401;
   bool get isNotFound => statusCode == 404;
+  bool get isRateLimited => statusCode == 429;
   bool get isServerError => statusCode != null && statusCode! >= 500;
 
   @override
