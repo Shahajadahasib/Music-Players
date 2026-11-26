@@ -86,4 +86,18 @@ void main() {
     );
     expect((await v.verify(track)).status, StreamStatus.playable);
   });
+
+  test('a real player failure overrides a cached "playable" HTTP check', () async {
+    var calls = 0;
+    final v = make(MockClient((_) async {
+      calls++;
+      return http.Response.bytes([0, 1], 206, headers: {'content-type': 'audio/mpeg'});
+    }));
+    expect((await v.verify(track)).isPlayable, isTrue);
+    v.markUnplayable('au1', reason: 'decoder error');
+    final again = await v.verify(track);
+    expect(again.status, StreamStatus.unavailable);
+    expect(again.reason, contains('decoder'));
+    expect(calls, 1, reason: 'served from the updated cache');
+  });
 }

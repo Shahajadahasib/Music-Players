@@ -33,11 +33,11 @@ FakeSource _catalogue() => FakeSource(
       ],
     );
 
-Widget _app({bool premium = false, List<MusicSource>? sources}) => ProviderScope(
+Widget _app({bool premium = false, List<MusicSource>? sources, FakeVerifier? verifier}) => ProviderScope(
       overrides: [
         availableSourcesProvider.overrideWithValue(sources ?? [_audius(), _catalogue()]),
         // No network in tests: every resolvable stream counts as verified.
-        streamVerifierProvider.overrideWith((ref) => FakeVerifier()),
+        streamVerifierProvider.overrideWith((ref) => verifier ?? FakeVerifier()),
         licenseControllerProvider.overrideWith((ref) => LicenseController(
               store: MemoryLicenseStore(),
               gateway: FakeGateway(available: false),
@@ -183,5 +183,51 @@ void main() {
     await t.tap(find.text('Close'));
     await _settle(t);
     expect(find.byTooltip('Pause'), findsNothing, reason: 'nothing started playing');
+  });
+
+  testWidgets('search results verify streams lazily (only rows on screen)', (t) async {
+    final many = FakeSource('audius', results: [
+      for (var i = 0; i < 40; i++) song('r$i', title: 'Rain Song $i', artist: 'Artist $i', sourceId: 'audius'),
+    ]);
+    final verifier = FakeVerifier();
+    await t.pumpWidget(_app(sources: [many], verifier: verifier));
+    await _settle(t);
+    await t.tap(find.text('Search').last);
+    await _settle(t);
+    await t.enterText(find.byType(TextField), 'rain');
+    await t.pump(const Duration(milliseconds: 500));
+    await _settle(t);
+
+    expect(find.text('Rain Song 0'), findsOneWidget);
+    expect(verifier.checked, isNotEmpty);
+    expect(verifier.checked.length, lessThan(40), reason: 'off-screen rows are not checked');
+  });
+
+  testWidgets('library regression: favourites and playlists still show saved songs', (t) async {
+    final fav = song('fav1', title: 'Saved Fixture Song', artist: 'Fixture Artist', sourceId: 'audius');
+    final inList = song('pl1', title: 'Playlist Fixture Song', artist: 'Fixture Artist', sourceId: 'audius');
+    await t.runAsync(() async {
+      await HiveStorageService.saveSongs([fav, inList]);
+      await HiveStorageService.saveFavorites([fav.id]);
+      final pl = await HiveStorageService.createPlaylist('Regression Mix');
+      await HiveStorageService.addSongToPlaylist(playlistId: pl.id, songId: inList.id);
+    });
+    await t.pumpWidget(_app(premium: true));
+    await _settle(t);
+    await t.tap(find.text('Library').last);
+    await _settle(t);
+
+    expect(find.text('Favourites'), findsOneWidget);
+    await t.tap(find.text('Favourites'));
+    await _settle(t);
+    expect(find.text('Saved Fixture Song'), findsOneWidget);
+    await t.pageBack();
+    await _settle(t);
+
+    await t.scrollUntilVisible(find.text('Regression Mix'), 200, scrollable: find.byType(Scrollable).last);
+    await t.tap(find.text('Regression Mix'));
+    await _settle(t);
+    expect(find.text('Playlist Fixture Song'), findsOneWidget);
+    expect(find.text('Play'), findsOneWidget);
   });
 }

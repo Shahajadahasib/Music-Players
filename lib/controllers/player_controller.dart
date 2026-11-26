@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../models/song.dart';
+import '../playback/error_gate.dart';
 import '../playback/fallback_planner.dart';
 import '../search/matched_track.dart';
 import '../search/search_aggregator.dart';
@@ -42,7 +43,13 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
   /// True while a new queue is being loaded; suppresses stale position events
   /// and lets [playPlaylist] handle load errors itself.
   bool _isSettingAudioSource = false;
-  bool _handlingError = false;
+  /// Serialises recovery; an error that arrives mid-recovery (e.g. the
+  /// replacement stream failing to load) is queued, not dropped.
+  late final SerialErrorGate<({int? index, String? songId, PlayerException? error})> _errorGate =
+      SerialErrorGate(_recover);
+
+  /// Notice to show once the switched-to source has actually started.
+  ({String songId, String message})? _pendingSwitchNotice;
   Timer? _bufferingTimeoutTimer;
   Timer? _sleepTimer;
   Timer? _noticeTimer;
@@ -248,6 +255,11 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
     if (_historyRecordedFor == marker) return;
     _historyRecordedFor = marker;
     _planner.markSuccess(song);
+    final notice = _pendingSwitchNotice;
+    if (notice != null && notice.songId == song.id) {
+      _pendingSwitchNotice = null;
+      _showNotice(notice.message);
+    }
     final ref = _references[song.id];
     if (ref != null) unawaited(_aggregator.rememberSuccess(ref, song));
     if (!(kIsWeb && song.isLocal)) {
@@ -474,13 +486,24 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
 
   // ── Failure recovery / fallback ────────────────────────────────────────
 
-  Future<void> _onPlaybackError(int? index, PlayerException? error) async {
-    if (_handlingError) return;
+  /// Reports a playback failure. Recovery runs one at a time; see
+  /// [_recover] for the steps.
+  Future<void> _onPlaybackError(int? index, PlayerException? error) {
+    final songId = index != null && index >= 0 && index < state.queue.length
+        ? state.queue[index].id
+        : null;
+    return _errorGate.report((index: index, songId: songId, error: error));
+  }
+
+  Future<void> _recover(({int? index, String? songId, PlayerException? error}) report) async {
+    final index = report.index;
+    final error = report.error;
     if (index == null || index < 0 || index >= state.queue.length) {
       _setError('Playback failed. Tap retry.');
       return;
     }
-    _handlingError = true;
+    // A queued error about a source that has since been replaced is stale.
+    if (report.songId != null && state.queue[index].id != report.songId) return;
     try {
       final failed = state.queue[index];
       debugPrint('[PlayerController] playback error on ${failed.id}: $error');
@@ -494,10 +517,16 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
         try {
           await _audioService.replace(index, failed);
           await _player.seek(resumeAt, index: index);
-          await _player.play();
+          // Not awaited: play() completes only when playback stops, which
+          // would keep recovery "busy" and swallow the next failure.
+          unawaited(_player.play());
           return;
         } catch (_) {/* fall through to alternatives */}
       }
+
+      // The player could not use this stream even after a retry: make sure
+      // a cached 2-byte check or discovery result doesn't offer it again.
+      _aggregator.verifier.markUnplayable(failed.id, reason: '$error');
 
       // 2/3. Another authorised source for the same recording.
       state = state.copyWith(isResolving: true);
@@ -508,7 +537,8 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
         if (resolved.isNotEmpty) {
           final next = resolved.first;
           try {
-            await _audioService.replace(index, next);
+            // Update state first so an error raised while the new source
+            // loads is attributed to it (not discarded as stale).
             final q = [...state.queue]..[index] = next;
             final ref = _references[failed.id];
             if (ref != null) _references[next.id] = ref;
@@ -519,13 +549,20 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
                 fallbackCount: state.diagnostics.fallbackCount + 1,
               ),
             );
+            // Announced only once the new source has actually started.
+            _pendingSwitchNotice = (
+              songId: next.id,
+              message: next.isPreview
+                  ? 'Full track unavailable — playing a preview'
+                  : 'Switched to ${_sourceName(next.sourceId)} for this song',
+            );
+            await _audioService.replace(index, next);
             await _player.seek(Duration.zero, index: index);
             unawaited(_player.play());
-            _showNotice(next.isPreview
-                ? 'Full track unavailable — playing a preview'
-                : 'Switched to ${_sourceName(next.sourceId)} for this song');
             return;
-          } catch (_) {/* try the next alternative */}
+          } catch (_) {
+            _aggregator.verifier.markUnplayable(next.id, reason: 'load failed');
+          }
         }
         alt = await _planner.nextFor(failed, reference: reference);
       }
@@ -544,7 +581,6 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
       _setError('Couldn’t play “${failed.title}”. $why');
     } finally {
       state = state.copyWith(isResolving: false);
-      _handlingError = false;
     }
   }
 

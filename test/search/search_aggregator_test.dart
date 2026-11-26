@@ -314,6 +314,19 @@ void main() {
       expect(d.found, isFalse);
     });
 
+    test('after the player fails a discovered stream, discovery finds another source of the same recording', () async {
+      final audius = FakeSource('audius', results: [original('au1', 'audius')]);
+      final archive = FakeSource('archive', results: [original('ia1', 'archive')]);
+      final verifier = FakeVerifier();
+      final agg = SearchAggregator(sources: () => [audius, archive], verifier: verifier);
+      expect((await agg.discover(ref)).playable!.id, 'au1');
+      expect(archive.calls, 0);
+      verifier.markUnplayable('au1'); // player could not decode it
+      final d = await agg.discover(ref);
+      expect(d.fromCache, isFalse);
+      expect(d.playable!.id, 'ia1');
+    });
+
     test('remembered successful match is preferred', () async {
       final audius = FakeSource('audius', results: [original('au1', 'audius'), original('au2', 'audius')]);
       final memory = InMemoryMatchMemory();

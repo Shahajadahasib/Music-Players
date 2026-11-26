@@ -8,7 +8,9 @@ lib/
 ├── models/                       Song (+Playability), Playlist, UserData, Hive adapters
 ├── sources/                      MusicSource interface + Audius, Internet Archive, iTunes, Jamendo
 ├── search/                       TextNormalizer, TrackMatcher, SearchAggregator, MatchedTrack
-├── playback/fallback_planner.dart  what to play when a stream fails
+├── playback/                     stream_verifier (is a stream really playable?),
+│                                 fallback_planner (same-recording fallback),
+│                                 error_gate (serialised, lossless error recovery)
 ├── services/                     AudioService (just_audio), Hive storage, local files, API client, ErrorReporter
 ├── controllers/                  PlayerController (Riverpod StateNotifier) + state
 ├── licensing/                    licence keys (Ed25519), store gateway (IAP), LicenseController
@@ -77,6 +79,14 @@ Not verified / Not streamable**. On **web**, browsers hide cross-origin
 response details (CORS), so a resolved URL counts as playable there and the
 player load is the final check.
 
+The 2-byte check is a fast **pre-filter**, not proof of playback. It proves
+the provider granted access and returned audio, but not that the player can
+decode the stream. So nothing is reported as playing until just_audio reports
+`ready` + `playing`, and that is also the only point where a match is saved to
+match memory. If the player then fails a stream, the controller calls
+`StreamVerifier.markUnplayable`. That overrides the cached check and
+invalidates cached discoveries, so the same dead stream isn't offered again.
+
 `SearchAggregator.discover(reference)` uses the same sequential, verified
 search for catalogue taps, album pages and playback fallback. Results are
 cached and the remembered successful match (`MatchMemory`, Hive) is preferred,
@@ -102,6 +112,10 @@ but it is re-verified before reuse.
   2. Try other known sources of the same recording, each verified first.
   3. Run sequential discovery on the next authorised providers.
   4. Stop playback and explain. It never moves on to a cover or another song by itself.
+
+  Recovery runs through `SerialErrorGate`. An error raised while recovery is
+  still switching sources is handled as soon as it finishes, not dropped.
+  The "Switched to …" notice appears only once the new source has started.
 
   A 20-second stall is treated as a failure. Search results play only the
   tapped recording; they don't queue the rest of the result list.

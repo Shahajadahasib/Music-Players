@@ -103,4 +103,7 @@ class FakeVerifier implements StreamVerifier {
   @override
   StreamCheck? cached(String songId) =>
       unavailable.contains(songId) ? const StreamCheck(StreamStatus.unavailable) : null;
+
+  @override
+  void markUnplayable(String songId, {String reason = ''}) => unavailable.add(songId);
 }

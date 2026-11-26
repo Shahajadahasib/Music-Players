@@ -39,17 +39,25 @@ abstract class StreamVerifier {
 
   /// Cached result, if any (used for instant badges).
   StreamCheck? cached(String songId);
+
+  /// Records that the **player** failed to load / play this stream. The
+  /// 2-byte HTTP check proves reachability and an audio content type, not
+  /// that the codec decodes, so a real player failure overrides it.
+  void markUnplayable(String songId, {String reason = ''});
 }
 
 /// Accepts everything that resolves to a URL. Used by tests that are not
 /// about verification, and as the no-op default.
 class TrustingStreamVerifier implements StreamVerifier {
-  const TrustingStreamVerifier(this.sourceById);
+  TrustingStreamVerifier(this.sourceById);
   final MusicSource? Function(String id) sourceById;
+  final Map<String, StreamCheck> _failed = {};
 
   @override
   Future<StreamCheck> verify(Song song) async {
     if (song.isLocal) return const StreamCheck(StreamStatus.playable);
+    final failed = _failed[song.id];
+    if (failed != null) return failed;
     final uri = await sourceById(song.sourceId)?.resolveStream(song);
     return uri == null
         ? const StreamCheck(StreamStatus.unavailable, reason: 'no stream')
@@ -57,7 +65,11 @@ class TrustingStreamVerifier implements StreamVerifier {
   }
 
   @override
-  StreamCheck? cached(String songId) => null;
+  StreamCheck? cached(String songId) => _failed[songId];
+
+  @override
+  void markUnplayable(String songId, {String reason = ''}) =>
+      _failed[songId] = StreamCheck(StreamStatus.unavailable, reason: reason);
 }
 
 /// Resolves the stream with the owning provider, then requests the first two
@@ -110,6 +122,14 @@ class HttpStreamVerifier implements StreamVerifier {
       return null;
     }
     return hit.check;
+  }
+
+  @override
+  void markUnplayable(String songId, {String reason = ''}) {
+    _cache[songId] = (
+      check: StreamCheck(StreamStatus.unavailable, reason: reason.isEmpty ? 'player failed' : reason),
+      at: _clock(),
+    );
   }
 
   @override

@@ -16,8 +16,8 @@ also sell the app itself as a paid download. There is no subscription.
 
 | | |
 |---|---|
-| 🔎 Multi-provider search | Concurrent search across Audius, Internet Archive (PD / CC BY) and Apple's catalogue. Normalisation, duplicate merging, confidence-scored matching, availability-aware ranking, caching, rate limiting |
-| 🎯 Honest availability | Every result is badged *Full track*, *Preview* or *Not streamable*. The app never plays a different recording (cover, karaoke, live) in place of the one you chose |
+| 🔎 Multi-provider search | Apple's catalogue identifies the song; then Audius, Jamendo (if licensed) and Internet Archive (PD / CC BY) are asked **one at a time**, stopping at the first verified exact original. Strict recording matching, caching, rate limiting, cancellation |
+| 🎯 Honest availability | Results are badged *Full track* (stream verified), *Preview*, *Not streamable* or *Original recording unavailable*. The app never plays a different recording (cover, karaoke, live, other artist) in place of the one you chose |
 | ▶️ Reliable playback | Fast start (tuned buffers), next-track pre-buffering, background playback, lock-screen / notification / Bluetooth / headset controls, audio-focus handling, automatic source fallback, stall detection |
 | 🎛 Player | Queue (play next, add, reorder, remove), shuffle, repeat one/all, seek with buffered indicator, volume, sleep timer |
 | 📚 Library | Favourites, playlists (create / rename / reorder / delete), recently played and history, artist and album pages, music files from your device |
