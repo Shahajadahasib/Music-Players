@@ -27,9 +27,21 @@ class InternetArchiveSource extends MusicSource {
   );
 
   /// Lucene clause selecting commercially re-usable licences only.
-  static const String licenceFilter = '(licenseurl:*publicdomain* OR '
-      'licenseurl:*creativecommons.org/licenses/by/* OR '
-      'licenseurl:*creativecommons.org/licenses/by-sa/*)';
+  ///
+  /// archive.org's search backend rejects wildcard terms that contain "/"
+  /// (it answers `BACKEND_ERROR`), so CC BY / BY-SA are matched by their exact
+  /// licence URLs; public-domain marks are matched by a slash-free wildcard.
+  static final String licenceFilter = () {
+    final terms = <String>['licenseurl:*publicdomain*'];
+    for (final kind in const ['by', 'by-sa']) {
+      for (final version in const ['1.0', '2.0', '2.5', '3.0', '4.0']) {
+        for (final scheme in const ['http', 'https']) {
+          terms.add('licenseurl:"$scheme://creativecommons.org/licenses/$kind/$version/"');
+        }
+      }
+    }
+    return '(${terms.join(' OR ')})';
+  }();
 
   @override
   SourceInfo get info => sourceInfo;
@@ -55,6 +67,12 @@ class InternetArchiveSource extends MusicSource {
   }
 
   static List<Song> parseSearch(Map<String, dynamic> body) {
+    // A rejected query comes back as HTTP 200 with an "error" field; surface
+    // it instead of silently returning no songs.
+    final error = body['error'];
+    if (error != null) {
+      throw SourceException(sourceInfo.id, 'Search rejected: $error');
+    }
     final response = body['response'];
     if (response is! Map) return const [];
     final docs = response['docs'];

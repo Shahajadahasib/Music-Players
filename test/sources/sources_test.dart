@@ -125,6 +125,25 @@ void main() {
       expect(InternetArchiveSource.isCommercialLicence(''), isFalse);
     });
 
+    test('licence filter avoids wildcards containing "/" (rejected by archive.org)', () {
+      final f = InternetArchiveSource.licenceFilter;
+      final wildcardTerms = RegExp(r'licenseurl:(\S+)').allMatches(f).map((m) => m.group(1)!)
+          .where((t) => t.contains('*'));
+      for (final t in wildcardTerms) {
+        expect(t.contains('/'), isFalse, reason: t);
+      }
+      expect(f, contains('"https://creativecommons.org/licenses/by/4.0/"'));
+      expect(f, contains('"http://creativecommons.org/licenses/by-sa/3.0/"'));
+      expect(f, isNot(contains('-nc')));
+    });
+
+    test('a rejected search is reported, not treated as "no songs"', () {
+      expect(
+        () => InternetArchiveSource.parseSearch({'error': '[BACKEND_ERROR] Invalid or no response'}),
+        throwsA(isA<SourceException>()),
+      );
+    });
+
     test('parses search docs and drops NC items even if the server returns them', () {
       final songs = InternetArchiveSource.parseSearch({
         'response': {
