@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:developer' as developer;
 
 import '../models/song.dart';
 import '../sources/music_source.dart';
@@ -151,12 +152,15 @@ class SearchAggregator {
         return await s.searchTracks(query, limit: perSource).timeout(perSourceTimeout);
       } on TimeoutException {
         failures[s.id] = '${s.info.displayName} did not respond in time';
+        _logFailure(s.id, 'timeout after ${perSourceTimeout.inSeconds}s');
       } on SourceException catch (e) {
         failures[s.id] = e.isRateLimited
             ? '${s.info.displayName} is rate-limiting requests'
             : '${s.info.displayName} is unavailable';
-      } catch (_) {
+        _logFailure(s.id, e);
+      } catch (e, st) {
         failures[s.id] = '${s.info.displayName} is unavailable';
+        _logFailure(s.id, e, st);
       }
       return <Song>[];
     }));
@@ -164,6 +168,21 @@ class SearchAggregator {
     final ranked = rank(query, perSourceResults, sources.map((s) => s.id).toList());
     return AggregatedSearchResult(query: query, tracks: ranked, failedSources: failures);
   }
+
+  /// Records the underlying cause (DNS, TLS, timeout, HTTP status…) in the
+  /// debug console / logcat, so "unavailable" in the UI can be diagnosed.
+  void _logFailure(String sourceId, Object error, [StackTrace? stack]) {
+    developer.log(
+      'search failed for $sourceId: $error',
+      name: 'aurora.search',
+      error: error,
+      stackTrace: stack,
+    );
+    lastFailureDetails[sourceId] = error.toString();
+  }
+
+  /// sourceId → raw error of the most recent failure (diagnostics only).
+  final Map<String, String> lastFailureDetails = {};
 
   /// Clusters + ranks results. Public for unit tests.
   List<MatchedTrack> rank(

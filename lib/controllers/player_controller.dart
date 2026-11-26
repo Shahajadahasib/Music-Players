@@ -280,6 +280,7 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
         isSearchLoading: false,
         searchError: result.allSourcesFailed
             ? 'Music services are unreachable. Check your connection and try again.'
+                '${_failureDetail()}'
             : null,
         clearSearchError: !result.allSourcesFailed,
       );
@@ -292,6 +293,16 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
       );
       return null;
     }
+  }
+
+  /// Short technical reason (e.g. "Failed host lookup") shown under the
+  /// friendly message so connection problems can be diagnosed from a
+  /// screenshot.
+  String _failureDetail() {
+    final details = _aggregator.lastFailureDetails.values;
+    if (details.isEmpty) return '';
+    final first = details.first.replaceAll(RegExp(r'\s+'), ' ');
+    return '\n\n(${first.length > 140 ? '${first.substring(0, 140)}…' : first})';
   }
 
   /// Back-compat name used by older widgets.

@@ -53,9 +53,11 @@ void main() {
     test('one failing provider does not break search and is reported', () async {
       final ok = FakeSource('ok', results: [song('1', title: 'Rain', artist: 'X')]);
       final broken = FakeSource('broken', error: const SourceException('broken', 'HTTP 500', statusCode: 500));
-      final r = await SearchAggregator(sources: () => [ok, broken]).search('rain');
+      final agg = SearchAggregator(sources: () => [ok, broken]);
+      final r = await agg.search('rain');
       expect(r.tracks, hasLength(1));
       expect(r.failedSources.keys, ['broken']);
+      expect(agg.lastFailureDetails['broken'], contains('HTTP 500'));
       expect(r.allSourcesFailed, isFalse);
     });
 
