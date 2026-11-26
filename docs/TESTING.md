@@ -83,14 +83,34 @@ sandboxes. Run this before each release.
 
 ## Verified while building this version
 
-- `flutter analyze`: no issues. `flutter test`: 120 passed. Server `dart test`: 9 passed.
+**Build and CI:**
+- `flutter analyze`: no issues. `flutter test`: 189 passed. Server `dart test`: 9 passed.
 - GitHub Actions (Flutter pinned to 3.47.9): analyze + tests + Web build, Android
-  release APK, iOS release build (no codesign) and licence-server tests all pass.
-- Live provider checks (Audius, iTunes, Internet Archive) from the build environment:
-  - "perfect ed sheeran" asked iTunes → Audius → Archive and showed "Original recording unavailable".
-  - "lofi" stopped after Audius.
-  - A real Audius original was found on Audius alone and its stream returned HTTP 206 audio.
-- `flutter build web --release --no-web-resources-cdn`: success. The built app was
-  driven in headless Chromium at phone and desktop sizes against the live APIs.
-- **Not verified here:** playback, lock-screen controls and purchases on physical
-  Android and iOS devices. Run the manual checklist above.
+  release APK (debug-signed), iOS release build (no codesign) and licence-server
+  tests all passed.
+- `flutter build web --release --no-web-resources-cdn`: success.
+
+**Live run** (`test_live`, 56 song/artist queries spaced to respect Apple's limit,
+0 rate-limited):
+- **English (17 songs):** every song was identified by the Apple catalogue. None
+  has an authorised full-track original, so all showed "Original recording
+  unavailable". No cover or re-upload was offered as the original.
+- **Bangla:** the Apple catalogue identified most dataset songs (Shironamhin, Warfaze,
+  Miles, Artcell, Aurthohin, Nemesis, Meghdol, Arnob, Habib Wahid, James, Ayub
+  Bachchu). None of those exact recordings is on an authorised full-track provider,
+  so they were not played.
+  - Artist searches return Audius streams for Shironamhin, Warfaze, Artcell, Arnob,
+    Habib Wahid, Tahsan, James (incl. "জেমস"), Fossils, Nachiketa, Arijit Singh and
+    others. They are listed as "Not verified" discovery results.
+  - Not found anywhere: "Hashnahena", "Shei Tumi" / "Ferari Mon" (LRB),
+    "Punorjonmo" (Avoidrafa), including their spelling and script variants.
+- **Other providers:**
+  - Free To Use search: 25 results.
+  - Radio Browser: 17 Bangladesh and 12 Bengali-language stations.
+  - MusicBrainz answered in one run (25 results) and returned HTTP 503 "server busy"
+    in the other.
+
+**Not verified here:**
+- Playback, lock-screen controls and purchases on physical Android and iOS devices.
+  Run the manual checklist above.
+- A real YouTube API key.
