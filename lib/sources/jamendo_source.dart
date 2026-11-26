@@ -93,6 +93,21 @@ class JamendoSource extends MusicSource {
         .whereType<Map<String, dynamic>>()
         .map(Song.fromJamendoJson)
         .where((s) => s.id.isNotEmpty && s.audioUrl.trim().isNotEmpty)
+        .map((s) => allowsCommercialStreaming(s.license)
+            ? s
+            // Licence forbids commercial use: keep as information only.
+            : s.copyWith(audioUrl: '', playability: Playability.none))
         .toList(growable: false);
+  }
+
+  /// Per-track licence check. A commercial agreement with Jamendo does not
+  /// lift a track's own Creative Commons NonCommercial (NC) restriction.
+  /// BY, BY-SA, BY-ND (streamed unmodified) and CC0 / public-domain allow it.
+  static bool allowsCommercialStreaming(String licenceUrl) {
+    final u = licenceUrl.toLowerCase();
+    if (u.isEmpty) return false;
+    if (u.contains('publicdomain')) return true;
+    if (!u.contains('creativecommons.org/licenses/')) return false;
+    return !u.contains('-nc') && !u.contains('/nc');
   }
 }

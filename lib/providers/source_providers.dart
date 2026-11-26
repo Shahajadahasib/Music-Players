@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/app_config.dart';
+import '../playback/stream_verifier.dart';
+import '../models/song.dart';
 import '../search/search_aggregator.dart';
 import '../services/hive_storage_service.dart';
 import '../sources/audius_source.dart';
@@ -48,11 +50,23 @@ class HiveMatchMemory implements MatchMemory {
   }
 }
 
+/// Confirms streams really load before they are labelled "Full track".
+final streamVerifierProvider = Provider<StreamVerifier>((ref) {
+  return HttpStreamVerifier(sourceById: (id) => ref.read(sourceByIdProvider(id)));
+});
+
 final searchAggregatorProvider = Provider<SearchAggregator>((ref) {
   return SearchAggregator(
     sources: () => ref.read(enabledSourcesProvider),
     memory: HiveMatchMemory(),
+    verifier: ref.watch(streamVerifierProvider),
   );
+});
+
+/// Lazily verifies one song's stream (search result badges). Cached by the
+/// verifier, so re-renders do not repeat requests.
+final streamCheckProvider = FutureProvider.autoDispose.family<StreamCheck, Song>((ref, song) {
+  return ref.read(streamVerifierProvider).verify(song);
 });
 
 /// Looks up a source by id (for lazy stream resolution and attribution).

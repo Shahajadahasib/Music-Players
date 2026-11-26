@@ -9,6 +9,7 @@ import 'package:music_player_app/main.dart';
 import 'package:music_player_app/models/song.dart';
 import 'package:music_player_app/providers/source_providers.dart';
 import 'package:music_player_app/services/hive_storage_service.dart';
+import 'package:music_player_app/sources/music_source.dart';
 import 'package:music_player_app/theme/aurora_theme.dart';
 
 import '../helpers.dart';
@@ -32,9 +33,11 @@ FakeSource _catalogue() => FakeSource(
       ],
     );
 
-Widget _app({bool premium = false}) => ProviderScope(
+Widget _app({bool premium = false, List<MusicSource>? sources}) => ProviderScope(
       overrides: [
-        availableSourcesProvider.overrideWithValue([_audius(), _catalogue()]),
+        availableSourcesProvider.overrideWithValue(sources ?? [_audius(), _catalogue()]),
+        // No network in tests: every resolvable stream counts as verified.
+        streamVerifierProvider.overrideWith((ref) => FakeVerifier()),
         licenseControllerProvider.overrideWith((ref) => LicenseController(
               store: MemoryLicenseStore(),
               gateway: FakeGateway(available: false),
@@ -83,12 +86,17 @@ void main() {
     expect(find.text('Fixture Night Drive'), findsOneWidget);
     expect(find.text('Fixture Catalogue Only'), findsOneWidget);
     expect(find.text('Not streamable'), findsOneWidget);
+    expect(find.text('Full track'), findsOneWidget, reason: 'verified stream');
+    expect(find.textContaining('Fake audius'), findsWidgets, reason: 'provider name is shown');
 
     // Tapping a catalogue-only song with no authorised stream explains why
     // and offers the provider link instead of playing something else.
     await t.tap(find.text('Fixture Catalogue Only'));
     await _settle(t);
-    expect(find.text('Not available to stream here'), findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(AlertDialog), matching: find.text('Original recording unavailable')),
+      findsOneWidget,
+    );
     expect(find.text('Open in Apple Music'), findsOneWidget);
   });
 
@@ -141,5 +149,39 @@ void main() {
     await _settle(t);
     final ctx = t.element(find.text('Appearance'));
     expect(Theme.of(ctx).brightness, Brightness.light);
+  });
+
+  testWidgets('a named song with no authorised original shows "Original recording unavailable" and never plays a cover',
+      (t) async {
+    final catalogue = FakeSource('itunes', fullTracks: false, results: [
+      song('itunes:7', title: 'Perfect', artist: 'Ed Sheeran', seconds: 263, sourceId: 'itunes',
+          playability: Playability.none, externalUrl: 'https://music.example/7'),
+    ]);
+    final audius = FakeSource('audius', results: [
+      song('cover', title: 'Perfect (Violin Cover)', artist: 'Strings Fixture', seconds: 250, sourceId: 'audius'),
+    ]);
+    await t.pumpWidget(_app(sources: [audius, catalogue]));
+    await _settle(t);
+    await t.tap(find.text('Search').last);
+    await _settle(t);
+    await t.enterText(find.byType(TextField), 'perfect ed sheeran');
+    await t.pump(const Duration(milliseconds: 500));
+    await _settle(t);
+
+    expect(find.text('Best match'), findsOneWidget);
+    expect(find.text('Original recording unavailable.'), findsOneWidget);
+    expect(find.text('Other songs'), findsOneWidget);
+    expect(find.text('Perfect (Violin Cover)'), findsOneWidget);
+
+    await t.tap(find.text('Perfect').first);
+    await _settle(t);
+    expect(
+      find.descendant(of: find.byType(AlertDialog), matching: find.text('Original recording unavailable')),
+      findsOneWidget,
+      reason: 'explains instead of playing',
+    );
+    await t.tap(find.text('Close'));
+    await _settle(t);
+    expect(find.byTooltip('Pause'), findsNothing, reason: 'nothing started playing');
   });
 }

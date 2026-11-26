@@ -199,6 +199,22 @@ void main() {
       expect(songs.single.license, contains('/by/3.0'));
     });
 
+    test('per-track licence: NonCommercial tracks never stream, even with an agreement', () {
+      final songs = JamendoSource.parseTracks({
+        'headers': {'status': 'success'},
+        'results': [
+          {'id': 1, 'name': 'Ok', 'artist_name': 'A', 'audio': 'https://mp3.test/1.mp3',
+           'license_ccurl': 'http://creativecommons.org/licenses/by-sa/3.0/'},
+          {'id': 2, 'name': 'NC', 'artist_name': 'B', 'audio': 'https://mp3.test/2.mp3',
+           'license_ccurl': 'http://creativecommons.org/licenses/by-nc-nd/3.0/'},
+        ],
+      });
+      expect(songs.firstWhere((s) => s.id == 'jamendo:1').playability, Playability.full);
+      final nc = songs.firstWhere((s) => s.id == 'jamendo:2');
+      expect(nc.playability, Playability.none);
+      expect(nc.audioUrl, isEmpty);
+    });
+
     test('API-level errors become SourceException', () {
       expect(
         () => JamendoSource.parseTracks({'headers': {'status': 'failed', 'error_message': 'bad client'}}),

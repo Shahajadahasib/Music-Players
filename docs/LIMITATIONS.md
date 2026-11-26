@@ -31,16 +31,22 @@
    back to the system font offline. For a zero-third-party-request build, add
    the font files under `assets/google_fonts/` and set
    `GoogleFonts.config.allowRuntimeFetching = false`.
-10. **Artwork-tinted backgrounds** use a palette accent seeded by the title, not
+10. **Stream verification on web** can't read cross-origin responses (CORS).
+    There, a resolved stream URL counts as playable and the player load is the
+    real check. On Android and iOS the HTTP check runs fully.
+11. **Classical and multi-performer titles** ("Moonlight Sonata") have no
+    single "original". These queries are treated as open searches unless a
+    performer is named.
+12. **Artwork-tinted backgrounds** use a palette accent seeded by the title, not
     colours extracted from the artwork.
-11. **Not run on physical devices in this environment.** Android and iOS builds
+13. **Not run on physical devices in this environment.** Android and iOS builds
     are compiled in CI, but real-device playback, lock-screen controls and store
     purchases still need the manual checklist in TESTING.md. The provider APIs
     could not be reached from the build sandbox, so live API behaviour (exact
     response fields, CORS, rate limits) must be confirmed on first run.
-12. **Application id / bundle id** are still `com.example.music_player_app`.
+14. **Application id / bundle id** are still `com.example.music_player_app`.
     Change them before publishing (DEPLOYMENT.md §3).
-13. **Brand.** "Aurora Music" is a placeholder name and the icon is the original
+15. **Brand.** "Aurora Music" is a placeholder name and the icon is the original
     repository's. Check trademarks.
 
 ## Third-party costs

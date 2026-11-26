@@ -17,29 +17,65 @@ abstract final class TextNormalizer {
     'č': 'c', 'š': 's', 'ž': 'z', 'ř': 'r', 'ğ': 'g', 'ı': 'i', 'ş': 's',
   };
 
-  /// Tags that identify a *different recording* than the original.
+  /// Words that identify a *different recording* than the original, mapped
+  /// to a canonical tag. Matching is whole-word, so "Alive" is not "live".
   static const Map<String, String> _versionKeywords = {
+    // performances / mixes
     'live': 'live',
     'remix': 'remix',
     'rmx': 'remix',
+    'rework': 'remix',
+    'bootleg': 'remix',
+    'mashup': 'remix',
+    'vip mix': 'remix',
+    'flip': 'remix',
     'acoustic': 'acoustic',
+    'unplugged': 'acoustic',
     'instrumental': 'instrumental',
     'karaoke': 'karaoke',
+    'demo': 'demo',
+    'edit': 'edit',
+    'extended': 'extended',
+    // covers / tributes
     'cover': 'cover',
+    'covered by': 'cover',
     'tribute': 'cover',
+    'in the style of': 'cover',
+    'originally performed by': 'cover',
+    'made famous by': 'cover',
+    'remake': 'cover',
+    // instrument arrangements
+    'violin': 'violin',
+    'viola': 'violin',
+    'cello': 'cello',
+    'piano': 'piano',
+    'guitar': 'guitar',
+    'ukulele': 'guitar',
+    'flute': 'flute',
+    'saxophone': 'sax',
+    'sax': 'sax',
+    'harp': 'harp',
+    'orchestral': 'orchestral',
+    'orchestra': 'orchestral',
+    'string quartet': 'orchestral',
+    'symphonic': 'orchestral',
+    'music box': 'musicbox',
+    'lullaby': 'lullaby',
+    '8 bit': '8bit',
+    '8-bit': '8bit',
+    'a cappella': 'acapella',
+    'acapella': 'acapella',
+    // tempo / effect edits
     'sped up': 'sped',
     'speed up': 'sped',
     'nightcore': 'sped',
     'slowed': 'slowed',
     'reverb': 'slowed',
-    'demo': 'demo',
-    'edit': 'edit',
-    'extended': 'extended',
-    'unplugged': 'acoustic',
-    'orchestral': 'orchestral',
-    'piano version': 'piano',
+    'bass boosted': 'bassboost',
+    '8d': '8d',
     'lofi': 'lofi',
     'lo-fi': 'lofi',
+    'lo fi': 'lofi',
   };
 
   /// Qualifiers that do NOT change the recording and are simply dropped.
@@ -75,19 +111,32 @@ abstract final class TextNormalizer {
     return s.replaceAll(_spaces, ' ').trim();
   }
 
-  /// Version tags (live, remix, …) found anywhere in [title].
+  /// Version tags (live, remix, violin, …) found anywhere in [title].
   static Set<String> versionTags(String title) {
-    final lower = foldDiacritics(title.toLowerCase());
+    final lower = ' ${foldDiacritics(title.toLowerCase()).replaceAll(RegExp(r'[^a-z0-9]+'), ' ')} ';
     final tags = <String>{};
     for (final entry in _versionKeywords.entries) {
-      if (RegExp('\\b${RegExp.escape(entry.key)}\\b').hasMatch(lower)) {
-        tags.add(entry.value);
-      }
+      final key = entry.key.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
+      if (lower.contains(' $key ')) tags.add(entry.value);
     }
-    // "Radio edit" is a noise qualifier, not a different recording.
-    if (lower.contains('radio edit')) tags.remove('edit');
+    // "Radio edit" / "single edit" are the same recording, trimmed.
+    if (lower.contains(' radio edit ') || lower.contains(' single edit ')) {
+      tags.remove('edit');
+    }
     return tags;
   }
+
+  /// Version tags present in [candidateTitle] that the [referenceTitle] does
+  /// not have and the user's [query] did not ask for. A non-empty result means
+  /// the candidate is a *different recording* (cover, remix, live, …).
+  static Set<String> unrequestedVersions(
+    String candidateTitle,
+    String referenceTitle, {
+    String query = '',
+  }) =>
+      versionTags(candidateTitle)
+          .difference(versionTags(referenceTitle))
+          .difference(versionTags(query));
 
   /// Canonical comparable title with featured artists, bracketed qualifiers
   /// and " - Remastered 2011" style suffixes removed.

@@ -84,9 +84,20 @@ never upgrades it.
 To remove one, delete it from `availableSourcesProvider`. Nothing else depends
 on a specific provider.
 
+## Safeguards in the search code
+- **Per-track licences (Jamendo).** Even with a commercial agreement, tracks
+  under a Creative Commons NonCommercial (NC) licence are metadata-only.
+- **Likely re-uploads hidden.** When the user names a song, uploads that put
+  the original artist's name in the title but come from another account
+  ("Ed Sheeran - Perfect (Lyrics)" by "The biggest song") are not shown. Audius
+  and the Internet Archive handle takedowns, but a paid app should not surface
+  obvious re-uploads of major-label songs.
+- **No substitution.** Covers, remixes, live and instrumental versions, and other
+  artists' songs are never played in place of the requested original.
+
 ## What the user experiences when no authorised source exists
 
-The track shows a **"Not streamable"** badge. Tapping it explains why and offers
+The Best match shows **"Original recording unavailable."** Tapping it explains why and offers
 "Open in Apple Music" (or the provider's page). The app never substitutes a
 different recording: the matcher rejects covers, karaoke, live versions and
 other artists (`test/search/matching_test.dart`).

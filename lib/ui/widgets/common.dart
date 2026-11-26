@@ -93,6 +93,53 @@ class AvailabilityBadge extends StatelessWidget {
   }
 }
 
+/// What the user can do with a search result, after verification.
+enum TrackStatus { full, checking, unverified, preview, unavailable, originalUnavailable, local }
+
+/// Badge for [TrackStatus] — every result says plainly whether it plays.
+class StatusBadge extends StatelessWidget {
+  const StatusBadge(this.status, {super.key});
+  final TrackStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final (label, color, icon) = switch (status) {
+      TrackStatus.full => ('Full track', p.success, Icons.graphic_eq_rounded),
+      TrackStatus.checking => ('Checking…', p.textTertiary, Icons.more_horiz_rounded),
+      TrackStatus.unverified => ('Not verified', p.warning, Icons.help_outline_rounded),
+      TrackStatus.preview => ('Preview', p.warning, Icons.timelapse_rounded),
+      TrackStatus.unavailable => ('Not streamable', p.textTertiary, Icons.block_rounded),
+      TrackStatus.originalUnavailable => ('Not available', p.danger, Icons.block_rounded),
+      TrackStatus.local => ('On device', p.accent, Icons.phone_iphone_rounded),
+    };
+    return Semantics(
+      label: label,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 11, color: color),
+            const SizedBox(width: 3),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: color),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Friendly empty / error state with optional action.
 class EmptyState extends StatelessWidget {
   const EmptyState({

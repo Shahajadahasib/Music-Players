@@ -272,8 +272,12 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
     }
     state = state.copyWith(isSearchLoading: true, clearSearchError: true);
     try {
-      final result = await _aggregator.search(q);
-      if (requestId != _searchRequestId) return result;
+      // A newer query cancels this one before its next provider request.
+      final result = await _aggregator.search(
+        q,
+        isCancelled: () => requestId != _searchRequestId,
+      );
+      if (requestId != _searchRequestId || result.cancelled) return result;
       state = state.copyWith(
         searchResult: result,
         searchResults: result.playableSongs,
@@ -310,19 +314,24 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
 
   // ── Starting playback ──────────────────────────────────────────────────
 
-  /// Plays search results starting at [index]. Catalogue-only tracks in the
-  /// list are skipped; if the tapped one is catalogue-only, an authorised
-  /// stream for the same recording is looked up first.
+  /// Plays the tapped track. If it is catalogue-only, a verified authorised
+  /// stream of the *same recording* is looked up first; if none exists,
+  /// nothing plays (an unrelated recording is never substituted).
+  ///
+  /// [queueAll] also queues the list's other playable tracks (artist and
+  /// album pages). Search results play only the chosen track.
   Future<bool> playMatched(
     List<MatchedTrack> tracks,
     int index, {
     bool reportUnavailable = true,
+    bool queueAll = true,
   }) async {
     if (index < 0 || index >= tracks.length) return false;
     final tapped = tracks[index];
     final queue = <Song>[];
     var start = 0;
     for (var i = 0; i < tracks.length; i++) {
+      if (!queueAll && i != index) continue;
       final t = tracks[i];
       Song? song;
       if (t.isPlayable) {
@@ -363,17 +372,14 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
   Future<Song?> _resolveCatalogueTrack(Song reference, {bool report = true}) async {
     state = state.copyWith(isResolving: true, clearError: true);
     try {
-      final found = await _aggregator.findPlayableFor(reference);
-      if (found.isEmpty) {
+      final d = await _aggregator.discover(reference);
+      if (!d.found) {
         if (!report) return null;
-        _setError(
-          '“${reference.title}” isn’t available from an authorised streaming '
-          'source in this app.',
-        );
+        _setError('“${reference.title}” — ${d.explanation}');
         return null;
       }
-      final best = found.first;
-      _planner.registerCandidates(best, found);
+      final best = d.playable!;
+      _planner.registerCandidates(best, [best, ...d.alternates]);
       _references[best.id] = reference;
       return best;
     } catch (_) {
@@ -481,9 +487,9 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
       final hadStarted = state.currentIndex == index &&
           state.position > const Duration(seconds: 2);
 
-      // 1. Transient mid-stream drop → retry same source from where it was.
-      if (_planner.shouldRetrySame(failed, hadStarted: hadStarted)) {
-        final resumeAt = state.position;
+      // 1. Retry the same source once (from where it was, if it had started).
+      if (_planner.shouldRetrySame(failed)) {
+        final resumeAt = hadStarted ? state.position : Duration.zero;
         await Future<void>.delayed(const Duration(milliseconds: 1500));
         try {
           await _audioService.replace(index, failed);
@@ -495,7 +501,8 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
 
       // 2/3. Another authorised source for the same recording.
       state = state.copyWith(isResolving: true);
-      var alt = await _planner.nextFor(failed);
+      final reference = _references[failed.id];
+      var alt = await _planner.nextFor(failed, reference: reference);
       while (alt != null) {
         final resolved = (await _resolveLazyStreams([alt], mustResolve: alt));
         if (resolved.isNotEmpty) {
@@ -520,23 +527,21 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
             return;
           } catch (_) {/* try the next alternative */}
         }
-        alt = await _planner.nextFor(failed);
+        alt = await _planner.nextFor(failed, reference: reference);
       }
 
-      // 4. Give up on this song.
+      // 4. No valid source of this recording: stop and explain. Never move
+      //    on to a different song or recording by itself.
       state = state.copyWith(
         diagnostics: state.diagnostics.copyWith(
           failedCount: state.diagnostics.failedCount + 1,
         ),
       );
-      if (_player.hasNext) {
-        await _player.seekToNext();
-        unawaited(_player.play());
-        _showNotice('Couldn’t play “${failed.title}” — skipped');
-      } else {
-        await _player.pause();
-        _setError('Couldn’t play “${failed.title}”. Check your connection and retry.');
-      }
+      await _player.pause();
+      final why = _planner.explanation.isEmpty
+          ? 'No authorised source could play it. Check your connection and retry.'
+          : _planner.explanation;
+      _setError('Couldn’t play “${failed.title}”. $why');
     } finally {
       state = state.copyWith(isResolving: false);
       _handlingError = false;

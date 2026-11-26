@@ -29,30 +29,58 @@ and match memory. The Premium entitlement is stored separately in
 
 ## Search and matching pipeline
 
+Providers are asked **one at a time, in priority order** (Audius → Jamendo,
+if licensed → Internet Archive). A later provider is only contacted when the
+earlier ones could not supply what was asked for.
+
 ```
 query ──► SearchAggregator.search
-           ├─ cache hit? (normalised query + enabled sources, 10 min TTL, LRU 60)
-           ├─ identical search already in flight? → share it
-           ├─ per-source rate limiter (iTunes 18/min)
-           ├─ Future.wait(all enabled sources, 8 s timeout each, errors isolated)
-           ├─ interleave results (every provider's top hits first)
-           ├─ cluster: TrackMatcher.sameSong ≥ 0.78 → same recording
-           ├─ per cluster: display = catalogue (iTunes) metadata if present
-           │               candidates = playable versions, full > preview,
-           │               remembered match first, then provider priority
-           └─ rank: 0.75·relevance + availability (full .25 / preview .12 / none 0)
-                    + small provider-rank bonus; drop relevance < 0.3
+  ├─ cache hit (normalised query + enabled sources, 10 min)? → return
+  ├─ identical search already running? → share it
+  ├─ 1. catalogue metadata (iTunes), independent of playback discovery
+  ├─ 2. pickReference: does the query name a specific song?
+  │      • whole title + artist named ("perfect ed sheeran"), or
+  │      • multi-word title clearly owned by one artist ("shape of you")
+  │      • otherwise an open search ("lofi", "moonlight sonata")
+  ├─ 3. full-track providers, sequentially (rate limit + 8 s timeout each;
+  │      a newer query cancels before the next request)
+  │      • named song: matchRecording → verify stream → STOP at the first
+  │        verified exact original; else ask the next provider
+  │      • open search: STOP at the first provider with relevant results
+  └─ 4. rank: Best match first (verified original, or "Original recording
+         unavailable" + store link); other recordings listed separately;
+         likely re-uploads of the named artist's song by other accounts hidden
 ```
 
-`TrackMatcher.sameSong` combines title similarity (token Jaccard or Levenshtein
-ratio after normalisation), artist similarity (best pair over split credits),
-and duration (±3 s / 10 s / 30 s bands, ignored for previews). It **penalises
-version mismatches** (live, remix, karaoke, cover, sped-up…), so a karaoke
-cover is never treated as the original.
+**Exact recording matching** (`TrackMatcher.matchRecording`) is rule-based.
+The old 0.78 similarity threshold accepted same-title tracks by near-miss
+artists ("Ed Sheeran Fan") and unknown artists, so it is now used only for
+ranking. A candidate is the requested recording only if **all** of these hold:
+- No version indicator the reference lacks and the query didn't ask for.
+  These are rejected, not penalised: cover, tribute, violin/piano/guitar/cello…,
+  instrumental, karaoke, remix, live, acoustic, sped up, slowed, nightcore,
+  8-bit, lullaby and similar. Matching is whole-word, so "Alive" is not "live",
+  and words in the real title ("Piano Man", "Live Your Life") are fine.
+- Normalised titles are equal (≥ 0.92 for typos), so "Perfect Symphony" ≠ "Perfect".
+- Both artists are known and the reference's primary artist is credited
+  (featured artists and a "The" prefix may differ).
+- Durations are within 8 s when both are reliable (never previews).
 
-`findPlayableFor(reference)` searches **full-track providers only**, so it
-doesn't spend iTunes' rate limit. It returns candidates that clear the match
-threshold, and is used for catalogue-only taps, album pages and fallback.
+**Stream verification** (`HttpStreamVerifier`) runs before anything is called a
+full track. It resolves the stream with the provider, then requests 2 bytes
+(`Range: bytes=0-1`, following redirects). The result is *playable* only for
+200/206 with an audio content type, and *unavailable* for 401/402/403/404/410/451
+or non-audio. Timeouts and 5xx count as *unknown*, never playable. Results are
+cached (30 min positive, 10 min negative), shared when in flight, and limited
+to 3 checks at a time. Search badges show **Checking… → Full track /
+Not verified / Not streamable**. On **web**, browsers hide cross-origin
+response details (CORS), so a resolved URL counts as playable there and the
+player load is the final check.
+
+`SearchAggregator.discover(reference)` uses the same sequential, verified
+search for catalogue taps, album pages and playback fallback. Results are
+cached and the remembered successful match (`MatchMemory`, Hive) is preferred,
+but it is re-verified before reuse.
 
 ## Audio engine
 
@@ -69,13 +97,14 @@ threshold, and is used for catalogue-only taps, album pages and fallback.
 - **Audio focus and interruptions:** handled by just_audio. It pauses for calls,
   ducks for navigation prompts, resumes afterwards, and pauses when headphones are
   unplugged.
-- **Failure recovery** (`FallbackPlanner`):
-  1. If a stream drops mid-song, retry the same source once from the same position.
-  2. Try other candidates already known from the search.
-  3. Run a fresh confidence-checked search on other authorised providers.
-  4. Skip to the next track and tell the user, or stop with a retry action.
+- **Failure recovery** (`FallbackPlanner`), always the *same recording*:
+  1. Retry the same source once (from the same position if it had started).
+  2. Try other known sources of the same recording, each verified first.
+  3. Run sequential discovery on the next authorised providers.
+  4. Stop playback and explain. It never moves on to a cover or another song by itself.
 
-  A 20-second stall is treated as a failure.
+  A 20-second stall is treated as a failure. Search results play only the
+  tapped recording; they don't queue the rest of the result list.
 - **Metrics (local only):** time from tap to audio (median of the last 50),
   rebuffer events, fallbacks and failed tracks. Shown in Settings → Diagnostics.
 

@@ -2,7 +2,7 @@
 
 ## Automated tests
 
-Run with `flutter test` (app, 76 tests) and `cd server && dart test` (licence server, 9 tests).
+Run with `flutter test` (app, 113 tests) and `cd server && dart test` (licence server, 9 tests).
 No test touches the network. Provider responses are synthetic fixtures shaped like
 each provider's documented format, and they are only used in tests.
 
@@ -10,7 +10,10 @@ each provider's documented format, and they are only used in tests.
 |---|---|---|
 | Normalisation & matching | `test/search/matching_test.dart` | feat./remaster/bracket stripping; "Stay With Me" keeps "with"; live/karaoke/cover ≠ original; same title by another artist ≠ match; duration bands; previews ignore duration; typo tolerance; relevance ranking and remix penalty |
 | Multi-provider search | `test/search/search_aggregator_test.dart` | concurrent search + cross-provider merge with catalogue metadata; full > preview > none ranking; doesn't pick the first responder; one provider failing or timing out doesn't break search; offline detection; cache, TTL, in-flight de-duplication; failed searches not cached; rate limiting; remembered matches; `findPlayableFor` only accepts confident matches and skips metadata providers |
-| Fallback | `test/playback/fallback_planner_test.dart` | order: known candidates → fresh search → give up; never a different recording; single same-source retry; local files have no fallback; offline lookup is safe; attempt cap |
+| Exact recording matching | `test/search/matching_test.dart` (`matchRecording`) | exact original; wrong / near-miss / missing artist; violin, piano, instrumental, karaoke, remix, live, sped up, nightcore, tribute rejected; similar titles rejected; duration mismatch; versions allowed only when requested; "Piano Man", "Live Your Life", "Alive" not misread |
+| Sequential search & discovery | `test/search/search_aggregator_test.dart` | metadata first; stop at the first verified original (later providers get **0 requests**); next provider only when needed; failed verification → same recording elsewhere; open searches stop at the first relevant provider; timeout and rate limit; cancellation sends no further requests; cached discovery reused but not when the stream is known gone; "original unavailable"; likely re-uploads hidden; catalogue duplicates folded |
+| Stream verification | `test/playback/stream_verifier_test.dart` | 206 audio → playable (2-byte range request); 403/404/410 and HTML → unavailable; timeout/5xx → unknown; caching and in-flight sharing; web mode |
+| Fallback | `test/playback/fallback_planner_test.dart` | retry same source once → verified known sources of the same recording → sequential discovery → stop with explanation; never a cover / instrumental / other artist; known-dead streams not retried; local files; offline; attempt cap |
 | Provider integrations | `test/sources/sources_test.dart` | Audius gated/non-streamable filtering, `app_name`, 429 handling; iTunes metadata-only by default and previews only when enabled; IA commercial-licence filter, NC rejection and MP3 resolution; Jamendo gating and parsing; API client retry, 4xx no-retry, timeout, bad JSON |
 | Licensing | `test/licensing/licensing_test.dart` | Ed25519 key round trip; tamper, foreign-signer, wrong-product and garbage rejection; **shared test vector with the server**; purchase → premium → persisted; server reject vs outage; cancel/error; restore; key activation and re-validation; deactivate; paid-upfront mode |
 | Storage | `test/models/storage_test.dart` | **v1 → v2 Hive migration** (old libraries still load); history order and cap; playlist CRUD and reorder; settings and match memory; delete-all-data |
@@ -58,7 +61,7 @@ sandboxes. Run this before each release.
 
 ## Verified while building this version
 
-- `flutter analyze`: no issues. `flutter test`: 76 passed. Server `dart test`: 9 passed.
+- `flutter analyze`: no issues. `flutter test`: 113 passed. Server `dart test`: 9 passed.
 - `flutter build web --release --no-web-resources-cdn`: success. The built app was
   loaded in headless Chromium at phone and desktop sizes. Home, offline state,
   search and cross-provider merging rendered correctly with intercepted fixture

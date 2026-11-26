@@ -103,4 +103,100 @@ void main() {
       expect(m.relevance('   ', song('1')), 0);
     });
   });
+
+  group('TrackMatcher.matchRecording (strict original recording)', () {
+    const m = TrackMatcher();
+    final perfect = song('itunes:1', title: 'Perfect', artist: 'Ed Sheeran', album: '÷', seconds: 263);
+
+    RecordingVerdict verdict(Song c, {String query = ''}) =>
+        m.matchRecording(perfect, c, query: query).verdict;
+
+    test('1. exact original recording matches', () {
+      expect(verdict(song('a', title: 'Perfect', artist: 'Ed Sheeran', seconds: 263)), RecordingVerdict.exact);
+      // Punctuation / case / remaster noise / featured artists are fine.
+      expect(verdict(song('b', title: 'PERFECT - Remastered 2017', artist: 'Ed Sheeran', seconds: 264)),
+          RecordingVerdict.exact);
+      expect(verdict(song('c', title: 'Perfect (feat. Someone)', artist: 'Ed Sheeran & Someone', seconds: 263)),
+          RecordingVerdict.exact);
+    });
+
+    test('2. wrong artist is rejected, including near-miss names', () {
+      expect(verdict(song('a', title: 'Perfect', artist: 'Simple Plan', seconds: 263)), RecordingVerdict.differentArtist);
+      expect(verdict(song('b', title: 'Perfect', artist: 'Ed Sheeran Fan', seconds: 263)), RecordingVerdict.differentArtist);
+      // Old scoring accepted this one (0.85 > 0.78):
+      expect(m.sameSong(perfect, song('b', title: 'Perfect', artist: 'Ed Sheeran Fan', seconds: 263)),
+          greaterThan(TrackMatcher.matchThreshold));
+    });
+
+    test('missing artist is never assumed to be correct', () {
+      expect(verdict(song('a', title: 'Perfect', artist: '', seconds: 263)), RecordingVerdict.missingArtist);
+    });
+
+    test('3. violin / piano / guitar covers are rejected outright', () {
+      expect(verdict(song('a', title: 'Perfect (Violin Cover)', artist: 'Ed Sheeran', seconds: 263)),
+          RecordingVerdict.unrequestedVersion);
+      expect(verdict(song('b', title: 'Perfect - Piano Version', artist: 'Ed Sheeran', seconds: 263)),
+          RecordingVerdict.unrequestedVersion);
+      expect(verdict(song('c', title: 'Perfect Violin Cover', artist: 'Ed Sheeran')),
+          isNot(RecordingVerdict.exact));
+    });
+
+    test('4. instrumental and karaoke are rejected', () {
+      expect(verdict(song('a', title: 'Perfect (Instrumental)', artist: 'Ed Sheeran', seconds: 263)),
+          RecordingVerdict.unrequestedVersion);
+      expect(verdict(song('b', title: 'Perfect [Karaoke Version]', artist: 'Ed Sheeran', seconds: 263)),
+          RecordingVerdict.unrequestedVersion);
+    });
+
+    test('5. remix / live / sped up / slowed / nightcore / tribute are rejected', () {
+      for (final t in [
+        'Perfect (Remix)', 'Perfect - Live at Wembley', 'Perfect (Sped Up)', 'Perfect (Slowed + Reverb)',
+        'Perfect (Nightcore)', 'Perfect (Tribute to Ed Sheeran)', 'Perfect (Acoustic)', 'Perfect (Lofi Flip)',
+      ]) {
+        expect(verdict(song('x', title: t, artist: 'Ed Sheeran', seconds: 263)), RecordingVerdict.unrequestedVersion,
+            reason: t);
+      }
+    });
+
+    test('6. a similar title is not the same song', () {
+      expect(verdict(song('a', title: 'Perfect Symphony', artist: 'Ed Sheeran', seconds: 263)),
+          isNot(RecordingVerdict.exact));
+      expect(verdict(song('b', title: 'Perfect Duet', artist: 'Ed Sheeran', seconds: 263)),
+          RecordingVerdict.differentTitle);
+    });
+
+    test('different duration means a different recording', () {
+      expect(verdict(song('a', title: 'Perfect', artist: 'Ed Sheeran', seconds: 330)), RecordingVerdict.durationMismatch);
+    });
+
+    test('versions are allowed only when the user asks for them', () {
+      final live = song('a', title: 'Perfect (Live)', artist: 'Ed Sheeran', seconds: 263);
+      expect(verdict(live), RecordingVerdict.unrequestedVersion);
+      expect(verdict(live, query: 'perfect ed sheeran live'), RecordingVerdict.exact);
+    });
+
+    test('version words that are part of the real title are not penalised', () {
+      final liveYourLife = song('r', title: 'Live Your Life', artist: 'T.I.', seconds: 338);
+      expect(m.matchRecording(liveYourLife, song('a', title: 'Live Your Life', artist: 'T.I.', seconds: 338)).isExact, isTrue);
+      final pianoMan = song('r2', title: 'Piano Man', artist: 'Billy Joel', seconds: 338);
+      expect(m.matchRecording(pianoMan, song('b', title: 'Piano Man', artist: 'Billy Joel', seconds: 339)).isExact, isTrue);
+      // "Alive" contains "live" but is a different word.
+      expect(TextNormalizer.versionTags('Alive'), isEmpty);
+    });
+
+    test('a live reference needs a live candidate', () {
+      final ref = song('r', title: 'Perfect (Live)', artist: 'Ed Sheeran', seconds: 270);
+      expect(m.matchRecording(ref, song('a', title: 'Perfect', artist: 'Ed Sheeran', seconds: 270)).verdict,
+          RecordingVerdict.unrequestedVersion);
+    });
+
+    test('"The" prefix and accents in artist names are tolerated', () {
+      final ref = song('r', title: 'Creep', artist: 'Radiohead');
+      expect(m.matchRecording(ref, song('a', title: 'Creep', artist: 'Radiohead')).isExact, isTrue);
+      final ref2 = song('r2', title: 'Halo', artist: 'Beyoncé');
+      expect(m.matchRecording(ref2, song('b', title: 'Halo', artist: 'Beyonce')).isExact, isTrue);
+      final ref3 = song('r3', title: 'Yesterday', artist: 'The Beatles');
+      expect(m.matchRecording(ref3, song('c', title: 'Yesterday', artist: 'Beatles')).isExact, isTrue);
+    });
+  });
 }

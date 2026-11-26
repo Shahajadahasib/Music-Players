@@ -3,14 +3,149 @@ import 'dart:math' as math;
 import '../models/song.dart';
 import 'text_normalizer.dart';
 
+/// Why a candidate was or wasn't accepted as the requested recording.
+enum RecordingVerdict {
+  exact,
+  differentTitle,
+  missingArtist,
+  differentArtist,
+  unrequestedVersion,
+  durationMismatch,
+}
+
+class RecordingMatch {
+  const RecordingMatch(this.verdict, {this.detail = '', this.score = 0});
+
+  final RecordingVerdict verdict;
+  final String detail;
+
+  /// Tie-breaker among exact matches (album / duration agreement), 0..1.
+  final double score;
+
+  bool get isExact => verdict == RecordingVerdict.exact;
+
+  @override
+  String toString() => '${verdict.name}${detail.isEmpty ? '' : ' ($detail)'}';
+}
+
 /// Scores how likely two tracks are the *same recording*, and how relevant a
 /// track is to a free-text query. Pure Dart, no I/O — fully unit-tested.
 class TrackMatcher {
   const TrackMatcher();
 
-  /// Minimum [sameSong] score for two results to be merged / for a stream to
-  /// be accepted as "the song the user asked for".
+  /// Legacy similarity threshold. [sameSong] is now only used for *ranking*;
+  /// accepting a stream as the requested recording uses [matchRecording],
+  /// which is rule-based (0.78 accepted e.g. a same-title track by
+  /// "Ed Sheeran Fan" for Ed Sheeran, and unknown artists).
   static const double matchThreshold = 0.78;
+
+  /// Normalised-title similarity required for an exact match. Allows small
+  /// typos / punctuation differences ("Dont" vs "Don't") but not extra words.
+  static const double titleThreshold = 0.92;
+
+  /// Artist-name similarity required (after splitting credits).
+  static const double artistThreshold = 0.9;
+
+  /// Durations further apart than this are different recordings (when both
+  /// are known and neither is a preview).
+  static const Duration durationTolerance = Duration(seconds: 8);
+
+  /// Decides whether [candidate] is the *same recording* as [reference].
+  ///
+  /// Rules (all must pass):
+  ///  * no version indicator (cover, remix, live, violin, karaoke, sped up…)
+  ///    that the reference lacks and the [query] did not request — these are
+  ///    rejected outright, not penalised;
+  ///  * normalised titles equal (≥ [titleThreshold] for typos), so a merely
+  ///    similar title ("Perfect Symphony" for "Perfect") is rejected;
+  ///  * both artists known, and the reference's primary artist appears in the
+  ///    candidate's credits (featured artists may differ);
+  ///  * durations within [durationTolerance] when both are reliable.
+  RecordingMatch matchRecording(Song reference, Song candidate, {String query = ''}) {
+    final extra = TextNormalizer.unrequestedVersions(
+      candidate.title,
+      reference.title,
+      query: query,
+    );
+    if (extra.isNotEmpty) {
+      return RecordingMatch(RecordingVerdict.unrequestedVersion, detail: extra.join(','));
+    }
+    // The reference itself may be a version the user asked for ("Live"):
+    // then the candidate must carry the same version.
+    final missing = TextNormalizer.versionTags(reference.title)
+        .difference(TextNormalizer.versionTags(candidate.title));
+    if (missing.isNotEmpty) {
+      return RecordingMatch(RecordingVerdict.unrequestedVersion, detail: 'missing ${missing.join(',')}');
+    }
+
+    final rt = TextNormalizer.title(reference.title);
+    final ct = TextNormalizer.title(candidate.title);
+    final titleSim = rt == ct ? 1.0 : _levRatio(rt, ct);
+    if (titleSim < titleThreshold) {
+      return RecordingMatch(RecordingVerdict.differentTitle, detail: '"$ct" vs "$rt"');
+    }
+
+    final refArtists = TextNormalizer.artists(reference.artist);
+    final candArtists = TextNormalizer.artists(candidate.artist);
+    if (refArtists.isEmpty || candArtists.isEmpty) {
+      return const RecordingMatch(RecordingVerdict.missingArtist);
+    }
+    final primary = TextNormalizer.basic(_primaryArtist(reference.artist));
+    var artistSim = 0.0;
+    for (final c in candArtists) {
+      artistSim = math.max(artistSim, _artistSimilarity(primary, c));
+    }
+    if (artistSim < artistThreshold) {
+      return RecordingMatch(
+        RecordingVerdict.differentArtist,
+        detail: '"${candidate.artist}" vs "${reference.artist}"',
+      );
+    }
+
+    final dr = reference.duration, dc = candidate.duration;
+    var durationScore = 0.5;
+    if (dr != null && dc != null && dr > Duration.zero && dc > Duration.zero &&
+        !reference.isPreview && !candidate.isPreview) {
+      final diff = (dr - dc).abs();
+      if (diff > durationTolerance) {
+        return RecordingMatch(
+          RecordingVerdict.durationMismatch,
+          detail: '${dc.inSeconds}s vs ${dr.inSeconds}s',
+        );
+      }
+      durationScore = 1 - diff.inMilliseconds / durationTolerance.inMilliseconds;
+    }
+
+    final albumMatch = reference.album.isNotEmpty &&
+        candidate.album.isNotEmpty &&
+        TextNormalizer.title(reference.album) == TextNormalizer.title(candidate.album);
+    return RecordingMatch(
+      RecordingVerdict.exact,
+      score: (0.5 * titleSim + 0.3 * durationScore + (albumMatch ? 0.2 : 0)).clamp(0.0, 1.0),
+    );
+  }
+
+  bool isSameRecording(Song reference, Song candidate, {String query = ''}) =>
+      matchRecording(reference, candidate, query: query).isExact;
+
+  /// First credited artist: "A feat. B & C" → "A".
+  static String _primaryArtist(String artist) {
+    final parts = artist.split(RegExp(r'\s*(?:,|&|/|;|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b|\bx\b|\bvs\.?)\s*', caseSensitive: false));
+    return parts.firstWhere((p) => p.trim().isNotEmpty, orElse: () => artist).trim();
+  }
+
+  /// Exact (ignoring a leading "the") or a near-identical spelling.
+  static double _artistSimilarity(String a, String b) {
+    String strip(String s) => s.startsWith('the ') ? s.substring(4) : s;
+    final x = strip(a), y = strip(b);
+    if (x == y) return 1;
+    return _levRatio(x, y);
+  }
+
+  static double _levRatio(String a, String b) {
+    if (a.isEmpty || b.isEmpty) return 0;
+    return 1 - _lev(a, b) / math.max(a.length, b.length);
+  }
 
   /// 0..1 — probability-like score that [a] and [b] are the same recording.
   double sameSong(Song a, Song b) {
