@@ -7,6 +7,20 @@
    catalogue) and *linked out*. They aren't streamed unless an independent or
    open version of the *same recording* exists. Streaming the full mainstream
    catalogue needs paid label/publisher licences or a B2B music provider.
+1a. **Bangla catalogue.** JioSaavn, Shadhin, Gaana and Spotify, which hold most
+   Bangla music, offer no public API that allows third-party streaming. Bangla
+   songs stream only when an artist published them on Audius or an open
+   archive. Otherwise the app says "Original recording unavailable" and links
+   out. Transliteration matching is rule-based: unusual spellings may be missed,
+   and a transliterated match needs agreeing durations before it is trusted.
+1b. **Without a catalogue answer** (e.g. iTunes rate-limited or offline), a
+   song query becomes a discovery list: results are labelled "Not verified"
+   and no "Best match" is claimed.
+1c. **YouTube** is a link to the official app/page only. No in-app or
+   background YouTube audio, by design. It needs a `YOUTUBE_API_KEY` and
+   uses 100 quota units per lookup.
+1d. **Radio** stations stream under their own licences. Availability depends on
+   each station, and Apple may ask for proof of streaming rights at review.
 2. **Provider terms not yet confirmed in writing.** Audius and the Internet
    Archive are integrated on the basis of their public terms. Get written
    confirmation before selling (see COMMERCIAL_CHECKLIST.md).

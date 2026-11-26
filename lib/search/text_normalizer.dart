@@ -44,6 +44,12 @@ abstract final class TextNormalizer {
     'originally performed by': 'cover',
     'made famous by': 'cover',
     'remake': 'cover',
+    // re-recordings by the same artist are different recordings
+    're-recorded': 'rerecord',
+    'rerecorded': 'rerecord',
+    're-recording': 'rerecord',
+    "taylor's version": 'rerecord',
+    'taylors version': 'rerecord',
     // instrument arrangements
     'violin': 'violin',
     'viola': 'violin',

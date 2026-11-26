@@ -6,11 +6,14 @@
 lib/
 ├── config/app_config.dart        build-time config (--dart-define), no secrets
 ├── models/                       Song (+Playability), Playlist, UserData, Hive adapters
-├── sources/                      MusicSource interface + Audius, Internet Archive, iTunes, Jamendo
-├── search/                       TextNormalizer, TrackMatcher, SearchAggregator, MatchedTrack
+├── sources/                      MusicSource interface (kind + capabilities) + Audius, Internet Archive,
+│                                 iTunes, Jamendo, Free To Use, MusicBrainz, YouTube (external), Radio Browser
+├── search/                       TextNormalizer (Unicode, Bengali transliteration), ArtistAliases,
+│                                 TrackMatcher, SearchAggregator, ProviderHealth, MatchedTrack
 ├── playback/                     stream_verifier (is a stream really playable?),
 │                                 fallback_planner (same-recording fallback),
-│                                 error_gate (serialised, lossless error recovery)
+│                                 error_gate (serialised, lossless error recovery),
+│                                 playback_ledger (what actually played → "Full track")
 ├── services/                     AudioService (just_audio), Hive storage, local files, API client, ErrorReporter
 ├── controllers/                  PlayerController (Riverpod StateNotifier) + state
 ├── licensing/                    licence keys (Ed25519), store gateway (IAP), LicenseController
@@ -29,11 +32,34 @@ songs, playlists, favourites, history (capped at 500), settings, recent searches
 and match memory. The Premium entitlement is stored separately in
 `flutter_secure_storage` (Keychain / Android Keystore / WebCrypto).
 
+## Provider kinds
+
+Every `MusicSource` declares a `SourceKind` and its `SourceCapability`s:
+
+| Kind | Providers | Used for |
+|---|---|---|
+| `metadata` | iTunes, MusicBrainz | identify the requested recording (title, artist, album, duration, ISRC); never played |
+| `fullTrack` | Audius, Jamendo*, Free To Use*, Internet Archive | in-app streaming (* only with a commercial licence flag) |
+| `externalPlayer` | YouTube | official player link, asked only when nothing plays in-app; URL opened with `url_launcher`, **never** given to just_audio |
+| `radio` | Radio Browser (`RadioSource`, not a `MusicSource`) | separate Radio screen only |
+
+Full-track order comes from `PROVIDER_PRIORITY`. `ProviderHealth` pauses a
+provider for 2 minutes after 3 consecutive failures (timeouts/5xx; rate limits
+are handled separately and don't count), shown in Settings → diagnostics.
+
 ## Search and matching pipeline
 
 Providers are asked **one at a time, in priority order** (Audius → Jamendo,
-if licensed → Internet Archive). A later provider is only contacted when the
-earlier ones could not supply what was asked for.
+if licensed → Free To Use, if licensed → Internet Archive). A later provider is
+only contacted when the earlier ones could not supply what was asked for.
+
+**Bangla:** `ArtistAliases.queryVariants` turns "শিরোনামহীন হাসনাহেনা" into
+the original query, "shironamhin হাসনাহেনা" and a fully transliterated
+variant. Each provider is asked with the original first and the variants only
+if it had nothing useful. The matcher accepts a Bengali-script title for a
+Latin one only when the phonetic keys agree **and** the durations agree
+(otherwise `transliterationUnconfirmed`); artist aliases (জেমস = James) are
+definite. An equal ISRC proves the same recording; a different ISRC rejects it.
 
 ```
 query ──► SearchAggregator.search
@@ -48,8 +74,11 @@ query ──► SearchAggregator.search
   │      a newer query cancels before the next request)
   │      • named song: matchRecording → verify stream → STOP at the first
   │        verified exact original; else ask the next provider
-  │      • open search: STOP at the first provider with relevant results
-  └─ 4. rank: Best match first (verified original, or "Original recording
+  │      • open search: collect relevant results provider by provider and
+  │        STOP once 20 are collected (discovery lists are labelled per source)
+  ├─ 4. named song with no verified original: ask external players
+  │      (YouTube) for the exact title + artist → "Open in YouTube"
+  └─ 5. rank: Best match first (verified original, or "Original recording
          unavailable" + store link); other recordings listed separately;
          likely re-uploads of the named artist's song by other accounts hidden
 ```
@@ -74,8 +103,12 @@ full track. It resolves the stream with the provider, then requests 2 bytes
 200/206 with an audio content type, and *unavailable* for 401/402/403/404/410/451
 or non-audio. Timeouts and 5xx count as *unknown*, never playable. Results are
 cached (30 min positive, 10 min negative), shared when in flight, and limited
-to 3 checks at a time. Search badges show **Checking… → Full track /
-Not verified / Not streamable**. On **web**, browsers hide cross-origin
+to 3 checks at a time. The probe cancels the response after the headers, so
+servers that ignore `Range` (and endless radio streams) are never downloaded.
+Search badges show **Checking… → Not verified / Not streamable**; a row
+becomes **Full track** only after the recording actually played in the app
+(`PlaybackLedger`, stored in Hive) and loses it again if the player later
+fails it. On **web**, browsers hide cross-origin
 response details (CORS), so a resolved URL counts as playable there and the
 player load is the final check.
 
@@ -108,7 +141,9 @@ but it is re-verified before reuse.
   ducks for navigation prompts, resumes afterwards, and pauses when headphones are
   unplugged.
 - **Failure recovery** (`FallbackPlanner`), always the *same recording*:
-  1. Retry the same source once (from the same position if it had started).
+  1. Retry the same source once (from the same position if it had started),
+     re-resolving the stream URL first so expired / signed links are renewed.
+     Local files and live radio stop here with an explanation.
   2. Try other known sources of the same recording, each verified first.
   3. Run sequential discovery on the next authorised providers.
   4. Stop playback and explain. It never moves on to a cover or another song by itself.

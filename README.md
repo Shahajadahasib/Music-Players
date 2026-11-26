@@ -1,9 +1,11 @@
 # Aurora Music
 
-A premium Flutter music player for **Android, iOS and Web**. Search once: the
-app queries several legitimate music services at the same time, works out which
-results are the same song, and plays the **best authorised source**. If a stream
-fails, it switches to another authorised source automatically.
+A premium Flutter music player for **Android, iOS and Web**. Search once in
+English or Bangla (বাংলা): the app identifies the song, asks legitimate music
+services **one at a time**, and plays only the **exact original recording** from
+an authorised source. If no authorised source has it, it says so and offers the
+official external player (Apple Music, YouTube) instead of playing something
+else. It does **not** play every song: see the research doc.
 
 Sold as a **one-time purchase**: a free tier plus a Premium unlock through the
 App Store or Google Play in-app purchase, or a licence key on the web. You can
@@ -17,7 +19,9 @@ also sell the app itself as a paid download. There is no subscription.
 | | |
 |---|---|
 | 🔎 Multi-provider search | Apple's catalogue identifies the song; then Audius, Jamendo (if licensed) and Internet Archive (PD / CC BY) are asked **one at a time**, stopping at the first verified exact original. Strict recording matching, caching, rate limiting, cancellation |
-| 🎯 Honest availability | Results are badged *Full track* (stream verified), *Preview*, *Not streamable* or *Original recording unavailable*. The app never plays a different recording (cover, karaoke, live, other artist) in place of the one you chose |
+| 🇧🇩 Bangla | Bengali Unicode and transliteration (শিরোনামহীন ≈ Shironamhin), artist aliases across scripts, Bengali version words; Bangladesh, West Bengal, folk and classic artists in the test datasets |
+| 🎯 Honest availability | Badges: *Checking…*, *Not verified* (stream answered, not yet played), *Full track* (only after it actually played), *Preview*, *Metadata only*, *External player*, *Licence not verified*, *Not streamable*, *Original recording unavailable*. The app never plays a different recording (cover, karaoke, live, other artist) in place of the one you chose |
+| 📻 Live radio | Separate Radio screen (Radio Browser): Bangladesh, Bangla, India, Hindi, English, Islamic, Classical, Jazz… stations; never mixed into song search |
 | ▶️ Reliable playback | Fast start (tuned buffers), next-track pre-buffering, background playback, lock-screen / notification / Bluetooth / headset controls, audio-focus handling, automatic source fallback, stall detection |
 | 🎛 Player | Queue (play next, add, reorder, remove), shuffle, repeat one/all, seek with buffered indicator, volume, sleep timer |
 | 📚 Library | Favourites, playlists (create / rename / reorder / delete), recently played and history, artist and album pages, music files from your device |
@@ -57,7 +61,9 @@ Search API are keyless. Accounts you'll need for selling:
 |---|---|
 | [docs/AUDIT.md](docs/AUDIT.md) | Stage 1 audit of the original code: bugs, fake or unreachable features, what was kept |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture, search/matching pipeline, audio engine, licensing design, backend vs on-device |
-| [docs/PROVIDER_LICENSING.md](docs/PROVIDER_LICENSING.md) | **Provider licensing matrix** and API integration details |
+| [docs/MUSIC_PROVIDER_RESEARCH.md](docs/MUSIC_PROVIDER_RESEARCH.md) | **Every provider researched** (15 questions each) and its classification |
+| [docs/API_SETUP.md](docs/API_SETUP.md) | Build flags, API keys, provider priority, enabling/disabling providers |
+| [docs/PROVIDER_LICENSING.md](docs/PROVIDER_LICENSING.md) | Provider licensing matrix and API integration details |
 | [docs/COMMERCIAL_CHECKLIST.md](docs/COMMERCIAL_CHECKLIST.md) | Licensing, store, payment and privacy compliance checklist |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Configuration and Android / iOS / Web / server build and release steps |
 | [docs/TESTING.md](docs/TESTING.md) | Automated test coverage and the manual device checklist |
@@ -80,7 +86,8 @@ lib/
   theme/        dark/light design system
   ui/           shell, screens, widgets
 server/         licence server (Dart)
-test/           unit + widget tests
+test/           unit + widget tests (mocked, run in CI)
+test_live/      optional live provider checks (real network, not in CI)
 ```
 
 ## Important: what users can stream
@@ -89,5 +96,7 @@ Free APIs that permit commercial apps **do not include full-length mainstream
 major-label music**. Aurora streams independent and artist-published music
 (Audius) and public-domain or CC-licensed recordings (Internet Archive) at full
 length. Mainstream songs are identified with Apple catalogue data and offered as
-an "Open in Apple Music" link. Details and options are in
-[docs/PROVIDER_LICENSING.md](docs/PROVIDER_LICENSING.md).
+an "Open in Apple Music" link (and "YouTube" when a key is configured). The
+big Bangla catalogues (JioSaavn, Shadhin, Gaana, Spotify) have no public API
+that allows third-party streaming. Details and options are in
+[docs/MUSIC_PROVIDER_RESEARCH.md](docs/MUSIC_PROVIDER_RESEARCH.md).

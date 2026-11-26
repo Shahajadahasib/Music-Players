@@ -15,6 +15,8 @@ Song song(
   Playability playability = Playability.full,
   String audioUrl = 'https://example.test/a.mp3',
   String externalUrl = '',
+  String isrc = '',
+  String license = '',
 }) =>
     Song(
       id: id,
@@ -27,6 +29,8 @@ Song song(
       sourceId: sourceId,
       playability: playability,
       externalUrl: externalUrl,
+      isrc: isrc,
+      license: license,
     );
 
 /// In-memory provider used to exercise search, ranking and fallback logic.
@@ -38,7 +42,11 @@ class FakeSource extends MusicSource {
     this.error,
     this.delay = Duration.zero,
     this.featured = const [],
+    this.kind,
   });
+
+  /// Overrides the provider kind (default: derived from [fullTracks]).
+  final SourceKind? kind;
 
   final String id_;
   List<Song> results;
@@ -61,6 +69,7 @@ class FakeSource extends MusicSource {
         commercialStatus: CommercialStatus.permitted,
         attribution: 'Fake',
         homepage: 'https://example.test',
+        kind: kind,
       );
 
   @override

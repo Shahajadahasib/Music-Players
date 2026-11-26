@@ -107,18 +107,28 @@ abstract final class ArtistAliases {
       }
     }
     if (hit != null && group != null) {
-      final wantBengali = !TextNormalizer.containsBengali(hit);
-      for (final name in _groups[group]) {
-        if (TextNormalizer.containsBengali(name) == wantBengali) {
-          out.add(basic.replaceFirst(hit, TextNormalizer.basic(name)));
-          break;
-        }
+      final names = _groups[group];
+      String swap(String name) => basic.replaceFirst(hit!, TextNormalizer.basic(name));
+      if (TextNormalizer.containsBengali(hit)) {
+        // Bengali artist → the canonical Latin name (how most catalogues
+        // credit the artist).
+        out.add(swap(names.first));
+      } else {
+        // Latin artist → another Latin spelling first ("LRB" → "Love Runs
+        // Blind"; ignoring mere punctuation variants), then the Bengali one.
+        final latin = names.where((n) =>
+            !TextNormalizer.containsBengali(n) &&
+            TextNormalizer.basic(n).replaceAll(' ', '') != hit!.replaceAll(' ', ''));
+        if (latin.isNotEmpty) out.add(swap(latin.first));
+        final bn = names.where(TextNormalizer.containsBengali);
+        if (bn.isNotEmpty) out.add(swap(bn.first));
       }
     }
     if (TextNormalizer.containsBengali(q)) {
       final latin = TextNormalizer.basic(TextNormalizer.bengaliToLatin(out.last));
       if (!out.contains(latin)) out.add(latin);
     }
-    return out.toSet().toList();
+    // At most three requests per provider for one search.
+    return out.toSet().take(3).toList();
   }
 }
