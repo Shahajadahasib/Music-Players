@@ -9,6 +9,7 @@ import 'package:music_player_app/main.dart';
 import 'package:music_player_app/models/song.dart';
 import 'package:music_player_app/providers/source_providers.dart';
 import 'package:music_player_app/services/hive_storage_service.dart';
+import 'package:music_player_app/sources/music_source.dart';
 import 'package:music_player_app/theme/aurora_theme.dart';
 
 import '../helpers.dart';
@@ -32,9 +33,11 @@ FakeSource _catalogue() => FakeSource(
       ],
     );
 
-Widget _app({bool premium = false}) => ProviderScope(
+Widget _app({bool premium = false, List<MusicSource>? sources, FakeVerifier? verifier}) => ProviderScope(
       overrides: [
-        availableSourcesProvider.overrideWithValue([_audius(), _catalogue()]),
+        availableSourcesProvider.overrideWithValue(sources ?? [_audius(), _catalogue()]),
+        // No network in tests: every resolvable stream counts as verified.
+        streamVerifierProvider.overrideWith((ref) => verifier ?? FakeVerifier()),
         licenseControllerProvider.overrideWith((ref) => LicenseController(
               store: MemoryLicenseStore(),
               gateway: FakeGateway(available: false),
@@ -82,13 +85,20 @@ void main() {
 
     expect(find.text('Fixture Night Drive'), findsOneWidget);
     expect(find.text('Fixture Catalogue Only'), findsOneWidget);
-    expect(find.text('Not streamable'), findsOneWidget);
+    expect(find.text('Metadata only'), findsOneWidget, reason: 'catalogue (iTunes) row');
+    // Stream answered the HTTP check but has not played yet → not "Full track".
+    expect(find.text('Not verified'), findsOneWidget, reason: 'reachable stream, not yet played');
+    expect(find.text('Full track'), findsNothing);
+    expect(find.textContaining('Fake audius'), findsWidgets, reason: 'provider name is shown');
 
     // Tapping a catalogue-only song with no authorised stream explains why
     // and offers the provider link instead of playing something else.
     await t.tap(find.text('Fixture Catalogue Only'));
     await _settle(t);
-    expect(find.text('Not available to stream here'), findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(AlertDialog), matching: find.text('Original recording unavailable')),
+      findsOneWidget,
+    );
     expect(find.text('Open in Apple Music'), findsOneWidget);
   });
 
@@ -141,5 +151,89 @@ void main() {
     await _settle(t);
     final ctx = t.element(find.text('Appearance'));
     expect(Theme.of(ctx).brightness, Brightness.light);
+  });
+
+  testWidgets('a named song with no authorised original shows "Original recording unavailable" and never plays a cover',
+      (t) async {
+    final catalogue = FakeSource('itunes', fullTracks: false, results: [
+      song('itunes:7', title: 'Perfect', artist: 'Ed Sheeran', seconds: 263, sourceId: 'itunes',
+          playability: Playability.none, externalUrl: 'https://music.example/7'),
+    ]);
+    final audius = FakeSource('audius', results: [
+      song('cover', title: 'Perfect (Violin Cover)', artist: 'Strings Fixture', seconds: 250, sourceId: 'audius'),
+    ]);
+    await t.pumpWidget(_app(sources: [audius, catalogue]));
+    await _settle(t);
+    await t.tap(find.text('Search').last);
+    await _settle(t);
+    await t.enterText(find.byType(TextField), 'perfect ed sheeran');
+    await t.pump(const Duration(milliseconds: 500));
+    await _settle(t);
+
+    expect(find.text('Best match'), findsOneWidget);
+    expect(find.text('Original recording unavailable.'), findsOneWidget);
+    expect(find.text('Other songs'), findsOneWidget);
+    expect(find.text('Perfect (Violin Cover)'), findsOneWidget);
+
+    await t.tap(find.text('Perfect').first);
+    await _settle(t);
+    expect(
+      find.descendant(of: find.byType(AlertDialog), matching: find.text('Original recording unavailable')),
+      findsOneWidget,
+      reason: 'explains instead of playing',
+    );
+    await t.tap(find.text('Close'));
+    await _settle(t);
+    expect(find.byTooltip('Pause'), findsNothing, reason: 'nothing started playing');
+  });
+
+  testWidgets('search results verify streams lazily (only rows on screen)', (t) async {
+    final many = FakeSource('audius', results: [
+      for (var i = 0; i < 40; i++) song('r$i', title: 'Rain Song $i', artist: 'Artist $i', sourceId: 'audius'),
+    ]);
+    final verifier = FakeVerifier();
+    await t.pumpWidget(_app(sources: [many], verifier: verifier));
+    await _settle(t);
+    await t.tap(find.text('Search').last);
+    await _settle(t);
+    await t.enterText(find.byType(TextField), 'rain');
+    await t.pump(const Duration(milliseconds: 500));
+    await _settle(t);
+
+    expect(find.text('Rain Song 0'), findsOneWidget);
+    expect(verifier.checked, isNotEmpty);
+    expect(verifier.checked.length, lessThan(40), reason: 'off-screen rows are not checked');
+  });
+
+  testWidgets('library regression: favourites and playlists still show saved songs', (t) async {
+    final fav = song('fav1', title: 'Saved Fixture Song', artist: 'Fixture Artist', sourceId: 'audius');
+    final inList = song('pl1', title: 'Playlist Fixture Song', artist: 'Fixture Artist', sourceId: 'audius');
+    await t.runAsync(() async {
+      await HiveStorageService.saveSongs([fav, inList]);
+      await HiveStorageService.saveFavorites([fav.id]);
+      final pl = await HiveStorageService.createPlaylist('Regression Mix');
+      await HiveStorageService.addSongToPlaylist(playlistId: pl.id, songId: inList.id);
+    });
+    await t.pumpWidget(_app(premium: true));
+    await _settle(t);
+    await t.tap(find.text('Library').last);
+    await _settle(t);
+
+    expect(find.text('Favourites'), findsOneWidget);
+    await t.tap(find.text('Favourites'));
+    await _settle(t);
+    expect(find.text('Saved Fixture Song'), findsOneWidget);
+    await t.pageBack();
+    await _settle(t);
+
+    await t.scrollUntilVisible(find.text('Regression Mix'), 200, scrollable: find.byType(Scrollable).last);
+    // scrollUntilVisible stops once the row is *built* (cache extent);
+    // bring it fully on screen before tapping.
+    await t.ensureVisible(find.text('Regression Mix'));
+    await _settle(t);
+    await t.tap(find.text('Regression Mix'));
+    await _settle(t);
+    expect(find.text('Playlist Fixture Song'), findsOneWidget);
+    expect(find.text('Play'), findsOneWidget);
   });
 }

@@ -6,9 +6,14 @@
 lib/
 ├── config/app_config.dart        build-time config (--dart-define), no secrets
 ├── models/                       Song (+Playability), Playlist, UserData, Hive adapters
-├── sources/                      MusicSource interface + Audius, Internet Archive, iTunes, Jamendo
-├── search/                       TextNormalizer, TrackMatcher, SearchAggregator, MatchedTrack
-├── playback/fallback_planner.dart  what to play when a stream fails
+├── sources/                      MusicSource interface (kind + capabilities) + Audius, Internet Archive,
+│                                 iTunes, Jamendo, Free To Use, MusicBrainz, YouTube (external), Radio Browser
+├── search/                       TextNormalizer (Unicode, Bengali transliteration), ArtistAliases,
+│                                 TrackMatcher, SearchAggregator, ProviderHealth, MatchedTrack
+├── playback/                     stream_verifier (is a stream really playable?),
+│                                 fallback_planner (same-recording fallback),
+│                                 error_gate (serialised, lossless error recovery),
+│                                 playback_ledger (what actually played → "Full track")
 ├── services/                     AudioService (just_audio), Hive storage, local files, API client, ErrorReporter
 ├── controllers/                  PlayerController (Riverpod StateNotifier) + state
 ├── licensing/                    licence keys (Ed25519), store gateway (IAP), LicenseController
@@ -27,32 +32,98 @@ songs, playlists, favourites, history (capped at 500), settings, recent searches
 and match memory. The Premium entitlement is stored separately in
 `flutter_secure_storage` (Keychain / Android Keystore / WebCrypto).
 
+## Provider kinds
+
+Every `MusicSource` declares a `SourceKind` and its `SourceCapability`s:
+
+| Kind | Providers | Used for |
+|---|---|---|
+| `metadata` | iTunes, MusicBrainz | identify the requested recording (title, artist, album, duration, ISRC); never played |
+| `fullTrack` | Audius, Jamendo*, Free To Use*, Internet Archive | in-app streaming (* only with a commercial licence flag) |
+| `externalPlayer` | YouTube | official player link, asked only when nothing plays in-app; URL opened with `url_launcher`, **never** given to just_audio |
+| `radio` | Radio Browser (`RadioSource`, not a `MusicSource`) | separate Radio screen only |
+
+Full-track order comes from `PROVIDER_PRIORITY`. `ProviderHealth` pauses a
+provider for 2 minutes after 3 consecutive failures (timeouts/5xx; rate limits
+are handled separately and don't count), shown in Settings → diagnostics.
+
 ## Search and matching pipeline
+
+Providers are asked **one at a time, in priority order** (Audius → Jamendo,
+if licensed → Free To Use, if licensed → Internet Archive). A later provider is
+only contacted when the earlier ones could not supply what was asked for.
+
+**Bangla:** `ArtistAliases.queryVariants` turns "শিরোনামহীন হাসনাহেনা" into
+the original query, "shironamhin হাসনাহেনা" and a fully transliterated
+variant. Each provider is asked with the original first and the variants only
+if it had nothing useful. The matcher accepts a Bengali-script title for a
+Latin one only when the phonetic keys agree **and** the durations agree
+(otherwise `transliterationUnconfirmed`); artist aliases (জেমস = James) are
+definite. An equal ISRC proves the same recording; a different ISRC rejects it.
 
 ```
 query ──► SearchAggregator.search
-           ├─ cache hit? (normalised query + enabled sources, 10 min TTL, LRU 60)
-           ├─ identical search already in flight? → share it
-           ├─ per-source rate limiter (iTunes 18/min)
-           ├─ Future.wait(all enabled sources, 8 s timeout each, errors isolated)
-           ├─ interleave results (every provider's top hits first)
-           ├─ cluster: TrackMatcher.sameSong ≥ 0.78 → same recording
-           ├─ per cluster: display = catalogue (iTunes) metadata if present
-           │               candidates = playable versions, full > preview,
-           │               remembered match first, then provider priority
-           └─ rank: 0.75·relevance + availability (full .25 / preview .12 / none 0)
-                    + small provider-rank bonus; drop relevance < 0.3
+  ├─ cache hit (normalised query + enabled sources, 10 min)? → return
+  ├─ identical search already running? → share it
+  ├─ 1. catalogue metadata (iTunes), independent of playback discovery
+  ├─ 2. pickReference: does the query name a specific song?
+  │      • whole title + artist named ("perfect ed sheeran"), or
+  │      • multi-word title clearly owned by one artist ("shape of you")
+  │      • otherwise an open search ("lofi", "moonlight sonata")
+  ├─ 3. full-track providers, sequentially (rate limit + 8 s timeout each;
+  │      a newer query cancels before the next request)
+  │      • named song: matchRecording → verify stream → STOP at the first
+  │        verified exact original; else ask the next provider
+  │      • open search: collect relevant results provider by provider and
+  │        STOP once 20 are collected (discovery lists are labelled per source)
+  ├─ 4. named song with no verified original: ask external players
+  │      (YouTube) for the exact title + artist → "Open in YouTube"
+  └─ 5. rank: Best match first (verified original, or "Original recording
+         unavailable" + store link); other recordings listed separately;
+         likely re-uploads of the named artist's song by other accounts hidden
 ```
 
-`TrackMatcher.sameSong` combines title similarity (token Jaccard or Levenshtein
-ratio after normalisation), artist similarity (best pair over split credits),
-and duration (±3 s / 10 s / 30 s bands, ignored for previews). It **penalises
-version mismatches** (live, remix, karaoke, cover, sped-up…), so a karaoke
-cover is never treated as the original.
+**Exact recording matching** (`TrackMatcher.matchRecording`) is rule-based.
+The old 0.78 similarity threshold accepted same-title tracks by near-miss
+artists ("Ed Sheeran Fan") and unknown artists, so it is now used only for
+ranking. A candidate is the requested recording only if **all** of these hold:
+- No version indicator the reference lacks and the query didn't ask for.
+  These are rejected, not penalised: cover, tribute, violin/piano/guitar/cello…,
+  instrumental, karaoke, remix, live, acoustic, sped up, slowed, nightcore,
+  8-bit, lullaby and similar. Matching is whole-word, so "Alive" is not "live",
+  and words in the real title ("Piano Man", "Live Your Life") are fine.
+- Normalised titles are equal (≥ 0.92 for typos), so "Perfect Symphony" ≠ "Perfect".
+- Both artists are known and the reference's primary artist is credited
+  (featured artists and a "The" prefix may differ).
+- Durations are within 8 s when both are reliable (never previews).
 
-`findPlayableFor(reference)` searches **full-track providers only**, so it
-doesn't spend iTunes' rate limit. It returns candidates that clear the match
-threshold, and is used for catalogue-only taps, album pages and fallback.
+**Stream verification** (`HttpStreamVerifier`) runs before anything is called a
+full track. It resolves the stream with the provider, then requests 2 bytes
+(`Range: bytes=0-1`, following redirects). The result is *playable* only for
+200/206 with an audio content type, and *unavailable* for 401/402/403/404/410/451
+or non-audio. Timeouts and 5xx count as *unknown*, never playable. Results are
+cached (30 min positive, 10 min negative), shared when in flight, and limited
+to 3 checks at a time. The probe cancels the response after the headers, so
+servers that ignore `Range` (and endless radio streams) are never downloaded.
+Search badges show **Checking… → Not verified / Not streamable**; a row
+becomes **Full track** only after the recording actually played in the app
+(`PlaybackLedger`, stored in Hive) and loses it again if the player later
+fails it. On **web**, browsers hide cross-origin
+response details (CORS), so a resolved URL counts as playable there and the
+player load is the final check.
+
+The 2-byte check is a fast **pre-filter**, not proof of playback. It proves
+the provider granted access and returned audio, but not that the player can
+decode the stream. So nothing is reported as playing until just_audio reports
+`ready` + `playing`, and that is also the only point where a match is saved to
+match memory. If the player then fails a stream, the controller calls
+`StreamVerifier.markUnplayable`. That overrides the cached check and
+invalidates cached discoveries, so the same dead stream isn't offered again.
+
+`SearchAggregator.discover(reference)` uses the same sequential, verified
+search for catalogue taps, album pages and playback fallback. Results are
+cached and the remembered successful match (`MatchMemory`, Hive) is preferred,
+but it is re-verified before reuse.
 
 ## Audio engine
 
@@ -69,13 +140,20 @@ threshold, and is used for catalogue-only taps, album pages and fallback.
 - **Audio focus and interruptions:** handled by just_audio. It pauses for calls,
   ducks for navigation prompts, resumes afterwards, and pauses when headphones are
   unplugged.
-- **Failure recovery** (`FallbackPlanner`):
-  1. If a stream drops mid-song, retry the same source once from the same position.
-  2. Try other candidates already known from the search.
-  3. Run a fresh confidence-checked search on other authorised providers.
-  4. Skip to the next track and tell the user, or stop with a retry action.
+- **Failure recovery** (`FallbackPlanner`), always the *same recording*:
+  1. Retry the same source once (from the same position if it had started),
+     re-resolving the stream URL first so expired / signed links are renewed.
+     Local files and live radio stop here with an explanation.
+  2. Try other known sources of the same recording, each verified first.
+  3. Run sequential discovery on the next authorised providers.
+  4. Stop playback and explain. It never moves on to a cover or another song by itself.
 
-  A 20-second stall is treated as a failure.
+  Recovery runs through `SerialErrorGate`. An error raised while recovery is
+  still switching sources is handled as soon as it finishes, not dropped.
+  The "Switched to …" notice appears only once the new source has started.
+
+  A 20-second stall is treated as a failure. Search results play only the
+  tapped recording; they don't queue the rest of the result list.
 - **Metrics (local only):** time from tap to audio (median of the last 50),
   rebuffer events, fallbacks and failed tracks. Shown in Settings → Diagnostics.
 

@@ -17,6 +17,10 @@ enum Playability {
 
   /// A file the user picked from their own device.
   local,
+
+  /// Playable only in the provider's official player (e.g. YouTube, Spotify),
+  /// opened externally. Never passed to just_audio.
+  external,
 }
 
 class Song extends Equatable {
@@ -80,6 +84,7 @@ class Song extends Equatable {
     this.license = '',
     this.artistId = '',
     this.albumId = '',
+    this.isrc = '',
   });
 
   /// Globally unique id. Audius ids are stored un-prefixed for backwards
@@ -111,8 +116,14 @@ class Song extends Equatable {
   final String artistId;
   final String albumId;
 
-  /// True when the app may play this track's audio at all.
-  bool get canPlay => playability != Playability.none;
+  /// International Standard Recording Code, when the provider supplies it.
+  /// The strongest identifier of one specific recording.
+  final String isrc;
+
+  /// True when the app may play this track's audio in its own player.
+  bool get canPlay => playability != Playability.none && playability != Playability.external;
+
+  bool get isExternal => playability == Playability.external;
 
   bool get isPreview => playability == Playability.preview;
 
@@ -133,6 +144,7 @@ class Song extends Equatable {
     String? license,
     String? artistId,
     String? albumId,
+    String? isrc,
   }) {
     return Song(
       id: id ?? this.id,
@@ -148,6 +160,7 @@ class Song extends Equatable {
       license: license ?? this.license,
       artistId: artistId ?? this.artistId,
       albumId: albumId ?? this.albumId,
+      isrc: isrc ?? this.isrc,
     );
   }
 
@@ -166,5 +179,6 @@ class Song extends Equatable {
         license,
         artistId,
         albumId,
+        isrc,
       ];
 }

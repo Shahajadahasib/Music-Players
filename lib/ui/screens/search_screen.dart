@@ -222,6 +222,8 @@ class _Results extends ConsumerWidget {
       if (artists.length >= 8) break;
     }
     final failed = result.failedSources;
+    final best = result.bestMatch;
+    final others = [for (final t in tracks) if (!t.isBestMatch) t];
 
     return ListView(
       key: ValueKey(result.query),
@@ -271,29 +273,58 @@ class _Results extends ConsumerWidget {
             ),
           ),
         ],
-        const SectionHeader('Songs', subtitle: 'Best playable source chosen automatically'),
-        for (var i = 0; i < tracks.length; i++)
-          StaggeredListEntrance(
-            index: i,
-            child: SongTile(
-              song: tracks[i].display,
-              track: tracks[i],
-              onTap: () async {
-                final hasLink = tracks[i].externalUrl.isNotEmpty;
-                final ok = await ref
-                    .read(playerControllerProvider.notifier)
-                    .playMatched(tracks, i, reportUnavailable: !hasLink);
-                if (!ok && context.mounted && hasLink) {
-                  _offerExternal(context, ref, tracks[i]);
-                }
-              },
+        if (best != null) ...[
+          const SectionHeader('Best match'),
+          _tile(context, ref, best, 0),
+          if (best.originalUnavailable)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 2, 20, 6),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+                decoration: BoxDecoration(
+                  color: palette.danger.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Original recording unavailable.', style: context.text.titleMedium?.copyWith(fontSize: 14)),
+                    const SizedBox(height: 2),
+                    Text(
+                      'None of the authorised streaming sources has this exact recording. '
+                      'Other songs below are different recordings.',
+                      style: context.text.bodySmall,
+                    ),
+                    if (_officialLinks(best).isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 4,
+                        children: [
+                          for (final l in _officialLinks(best))
+                            TextButton.icon(
+                              icon: Icon(l.icon, size: 18),
+                              label: Text(l.label == 'provider page' ? 'Open' : l.label),
+                              onPressed: () => openExternal(context, l.url),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
+        ],
+        if (others.isNotEmpty)
+          SectionHeader(
+            best == null ? 'Songs' : 'Other songs',
+            subtitle: best == null ? 'Tap to play · availability is checked first' : null,
           ),
+        for (var i = 0; i < others.length; i++)
+          StaggeredListEntrance(index: i + 1, child: _tile(context, ref, others[i], i + 1)),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
           child: Text(
-            'Searched: ${ref.read(enabledSourcesProvider).map((s) => s.info.displayName).join(', ')}.'
-            '${result.fromCache ? ' (cached)' : ''}',
+            _checkedLine(ref) + (result.fromCache ? ' (cached)' : ''),
             style: context.text.bodySmall,
           ),
         ),
@@ -301,24 +332,82 @@ class _Results extends ConsumerWidget {
     );
   }
 
+  Widget _tile(BuildContext context, WidgetRef ref, MatchedTrack t, int i) => SongTile(
+        song: t.display,
+        track: t,
+        onTap: () async {
+          // Official external players open in their own app / page; their
+          // URLs never reach the in-app audio player.
+          if (t.display.isExternal) {
+            openExternal(context, t.display.externalUrl);
+            return;
+          }
+          final hasLink = _officialLinks(t).isNotEmpty;
+          // Plays only this recording: never queues or substitutes others.
+          final ok = await ref
+              .read(playerControllerProvider.notifier)
+              .playMatched([t], 0, reportUnavailable: !hasLink, queueAll: false);
+          if (!ok && context.mounted && hasLink) _offerExternal(context, ref, t);
+        },
+      );
+
+  /// "Checked: Apple Music catalogue, Audius (found)" — which providers were
+  /// actually asked, in order. Later providers are skipped once one has it.
+  String _checkedLine(WidgetRef ref) {
+    if (result.attempts.isEmpty) return '';
+    String name(String id) => ref.read(sourceByIdProvider(id))?.info.displayName ?? id;
+    final parts = [
+      for (final a in result.attempts)
+        '${name(a.sourceId)}${switch (a.outcome) {
+          AttemptOutcome.verified => ' (original found)',
+          AttemptOutcome.unplayable => ' (match not playable)',
+          AttemptOutcome.noMatch => ' (no match)',
+          AttemptOutcome.timeout => ' (timed out)',
+          AttemptOutcome.rateLimited => ' (rate limited)',
+          AttemptOutcome.error => ' (unavailable)',
+          AttemptOutcome.results => '',
+          AttemptOutcome.paused => ' (paused)',
+          AttemptOutcome.external => ' (official player)',
+        }}',
+    ];
+    return 'Checked: ${parts.join(', ')}.';
+  }
+
+  /// Official places to listen when no authorised in-app stream exists:
+  /// the catalogue's store page and/or the official YouTube player.
+  static List<({String label, String url, IconData icon})> _officialLinks(MatchedTrack t) {
+    final links = <({String label, String url, IconData icon})>[];
+    final store = t.externalUrl;
+    if (store.startsWith('https://')) {
+      final apple = t.display.sourceId == 'itunes' || t.references.any((r) => r.sourceId == 'itunes');
+      links.add((label: apple ? 'Apple Music' : 'provider page', url: store, icon: Icons.open_in_new_rounded));
+    }
+    final yt = t.externalOption;
+    if (yt != null && yt.externalUrl.startsWith('https://')) {
+      links.add((label: 'YouTube', url: yt.externalUrl, icon: Icons.smart_display_rounded));
+    }
+    return links;
+  }
+
   void _offerExternal(BuildContext context, WidgetRef ref, MatchedTrack t) {
     showDialog<void>(
       context: context,
       builder: (d) => AlertDialog(
-        title: const Text('Not available to stream here'),
+        title: const Text('Original recording unavailable'),
         content: Text(
-          '“${t.display.title}” by ${t.display.artist} isn’t offered by any music service this app is licensed to stream. '
-          'You can listen to it on the provider’s own app.',
+          '“${t.display.title}” by ${t.display.artist} isn’t offered by any music service this app is '
+          'licensed to stream, so nothing was played. You can listen to it in the provider’s own app.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d), child: const Text('Close')),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(d);
-              openExternal(context, t.externalUrl);
-            },
-            child: Text(t.display.sourceId == 'itunes' ? 'Open in Apple Music' : 'Open'),
-          ),
+          for (final l in _officialLinks(t))
+            FilledButton.tonal(
+              onPressed: () {
+                Navigator.pop(d);
+                openExternal(context, l.url);
+              },
+              child: Text('Open in ${l.label}'),
+            ),
         ],
       ),
     );

@@ -125,6 +125,25 @@ void main() {
       expect(InternetArchiveSource.isCommercialLicence(''), isFalse);
     });
 
+    test('licence filter avoids wildcards containing "/" (rejected by archive.org)', () {
+      final f = InternetArchiveSource.licenceFilter;
+      final wildcardTerms = RegExp(r'licenseurl:(\S+)').allMatches(f).map((m) => m.group(1)!)
+          .where((t) => t.contains('*'));
+      for (final t in wildcardTerms) {
+        expect(t.contains('/'), isFalse, reason: t);
+      }
+      expect(f, contains('"https://creativecommons.org/licenses/by/4.0/"'));
+      expect(f, contains('"http://creativecommons.org/licenses/by-sa/3.0/"'));
+      expect(f, isNot(contains('-nc')));
+    });
+
+    test('a rejected search is reported, not treated as "no songs"', () {
+      expect(
+        () => InternetArchiveSource.parseSearch({'error': '[BACKEND_ERROR] Invalid or no response'}),
+        throwsA(isA<SourceException>()),
+      );
+    });
+
     test('parses search docs and drops NC items even if the server returns them', () {
       final songs = InternetArchiveSource.parseSearch({
         'response': {
@@ -178,6 +197,22 @@ void main() {
       expect(songs.single.id, 'jamendo:5');
       expect(songs.single.duration, const Duration(seconds: 120));
       expect(songs.single.license, contains('/by/3.0'));
+    });
+
+    test('per-track licence: NonCommercial tracks never stream, even with an agreement', () {
+      final songs = JamendoSource.parseTracks({
+        'headers': {'status': 'success'},
+        'results': [
+          {'id': 1, 'name': 'Ok', 'artist_name': 'A', 'audio': 'https://mp3.test/1.mp3',
+           'license_ccurl': 'http://creativecommons.org/licenses/by-sa/3.0/'},
+          {'id': 2, 'name': 'NC', 'artist_name': 'B', 'audio': 'https://mp3.test/2.mp3',
+           'license_ccurl': 'http://creativecommons.org/licenses/by-nc-nd/3.0/'},
+        ],
+      });
+      expect(songs.firstWhere((s) => s.id == 'jamendo:1').playability, Playability.full);
+      final nc = songs.firstWhere((s) => s.id == 'jamendo:2');
+      expect(nc.playability, Playability.none);
+      expect(nc.audioUrl, isEmpty);
     });
 
     test('API-level errors become SourceException', () {

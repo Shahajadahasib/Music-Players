@@ -67,6 +67,7 @@ class AvailabilityBadge extends StatelessWidget {
       Playability.local => ('On device', p.accent, Icons.phone_iphone_rounded),
       Playability.preview => ('Preview', p.warning, Icons.timelapse_rounded),
       Playability.none => ('Not streamable', p.textTertiary, Icons.block_rounded),
+      Playability.external => ('External player', p.accentAlt, Icons.open_in_new_rounded),
     };
     if (compact && playability == Playability.full) return const SizedBox.shrink();
     return Semantics(
@@ -85,6 +86,72 @@ class AvailabilityBadge extends StatelessWidget {
             Text(
               label,
               style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// What the user can do with a search result, after verification.
+/// * [full] — the recording has actually played in this app before.
+/// * [unverified] — the stream answered with audio, but has not been played
+///   yet (an HTTP check alone doesn't prove the whole recording plays).
+enum TrackStatus {
+  full,
+  checking,
+  unverified,
+  preview,
+  metadataOnly,
+  externalPlayer,
+  unavailable,
+  licenceNotVerified,
+  originalUnavailable,
+  local,
+  liveRadio,
+}
+
+/// Badge for [TrackStatus] — every result says plainly whether it plays.
+class StatusBadge extends StatelessWidget {
+  const StatusBadge(this.status, {super.key});
+  final TrackStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final (label, color, icon) = switch (status) {
+      TrackStatus.full => ('Full track', p.success, Icons.graphic_eq_rounded),
+      TrackStatus.checking => ('Checking…', p.textTertiary, Icons.more_horiz_rounded),
+      TrackStatus.unverified => ('Not verified', p.warning, Icons.help_outline_rounded),
+      TrackStatus.preview => ('Preview', p.warning, Icons.timelapse_rounded),
+      TrackStatus.metadataOnly => ('Metadata only', p.textTertiary, Icons.info_outline_rounded),
+      TrackStatus.externalPlayer => ('External player', p.accentAlt, Icons.open_in_new_rounded),
+      TrackStatus.licenceNotVerified => ('Licence not verified', p.warning, Icons.gpp_maybe_outlined),
+      TrackStatus.unavailable => ('Not streamable', p.textTertiary, Icons.block_rounded),
+      TrackStatus.originalUnavailable => ('Not available', p.danger, Icons.block_rounded),
+      TrackStatus.local => ('On device', p.accent, Icons.phone_iphone_rounded),
+      TrackStatus.liveRadio => ('Live radio', p.accentWarm, Icons.sensors_rounded),
+    };
+    return Semantics(
+      label: label,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 11, color: color),
+            const SizedBox(width: 3),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: color),
+              ),
             ),
           ],
         ),

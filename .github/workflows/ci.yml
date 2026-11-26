@@ -14,6 +14,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: newer releases deprecate package:flutter/material.dart
+          # (moving to material_ui). Upgrade deliberately, not implicitly.
+          flutter-version: 3.47.9
           cache: true
       - run: flutter pub get
       - run: flutter analyze
@@ -32,6 +35,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: newer releases deprecate package:flutter/material.dart
+          # (moving to material_ui). Upgrade deliberately, not implicitly.
+          flutter-version: 3.47.9
           cache: true
       - run: flutter pub get
       - run: flutter build apk --release --dart-define-from-file=config/example.json
@@ -44,6 +50,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: newer releases deprecate package:flutter/material.dart
+          # (moving to material_ui). Upgrade deliberately, not implicitly.
+          flutter-version: 3.47.9
           cache: true
       - run: flutter pub get
       - run: flutter build ios --release --no-codesign --dart-define-from-file=config/example.json

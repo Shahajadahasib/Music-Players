@@ -7,6 +7,20 @@
    catalogue) and *linked out*. They aren't streamed unless an independent or
    open version of the *same recording* exists. Streaming the full mainstream
    catalogue needs paid label/publisher licences or a B2B music provider.
+1a. **Bangla catalogue.** JioSaavn, Shadhin, Gaana and Spotify, which hold most
+   Bangla music, offer no public API that allows third-party streaming. Bangla
+   songs stream only when an artist published them on Audius or an open
+   archive. Otherwise the app says "Original recording unavailable" and links
+   out. Transliteration matching is rule-based: unusual spellings may be missed,
+   and a transliterated match needs agreeing durations before it is trusted.
+1b. **Without a catalogue answer** (e.g. iTunes rate-limited or offline), a
+   song query becomes a discovery list: results are labelled "Not verified"
+   and no "Best match" is claimed.
+1c. **YouTube** is a link to the official app/page only. No in-app or
+   background YouTube audio, by design. It needs a `YOUTUBE_API_KEY` and
+   uses 100 quota units per lookup.
+1d. **Radio** stations stream under their own licences. Availability depends on
+   each station, and Apple may ask for proof of streaming rights at review.
 2. **Provider terms not yet confirmed in writing.** Audius and the Internet
    Archive are integrated on the basis of their public terms. Get written
    confirmation before selling (see COMMERCIAL_CHECKLIST.md).
@@ -31,16 +45,22 @@
    back to the system font offline. For a zero-third-party-request build, add
    the font files under `assets/google_fonts/` and set
    `GoogleFonts.config.allowRuntimeFetching = false`.
-10. **Artwork-tinted backgrounds** use a palette accent seeded by the title, not
+10. **Stream verification on web** can't read cross-origin responses (CORS).
+    There, a resolved stream URL counts as playable and the player load is the
+    real check. On Android and iOS the HTTP check runs fully.
+11. **Classical and multi-performer titles** ("Moonlight Sonata") have no
+    single "original". These queries are treated as open searches unless a
+    performer is named.
+12. **Artwork-tinted backgrounds** use a palette accent seeded by the title, not
     colours extracted from the artwork.
-11. **Not run on physical devices in this environment.** Android and iOS builds
+13. **Not run on physical devices in this environment.** Android and iOS builds
     are compiled in CI, but real-device playback, lock-screen controls and store
     purchases still need the manual checklist in TESTING.md. The provider APIs
     could not be reached from the build sandbox, so live API behaviour (exact
     response fields, CORS, rate limits) must be confirmed on first run.
-12. **Application id / bundle id** are still `com.example.music_player_app`.
+14. **Application id / bundle id** are still `com.example.music_player_app`.
     Change them before publishing (DEPLOYMENT.md §3).
-13. **Brand.** "Aurora Music" is a placeholder name and the icon is the original
+15. **Brand.** "Aurora Music" is a placeholder name and the icon is the original
     repository's. Check trademarks.
 
 ## Third-party costs

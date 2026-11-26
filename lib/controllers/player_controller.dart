@@ -5,12 +5,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../models/song.dart';
+import '../playback/error_gate.dart';
 import '../playback/fallback_planner.dart';
+import '../playback/playback_ledger.dart';
 import '../search/matched_track.dart';
 import '../search/search_aggregator.dart';
 import '../services/audio_service.dart';
 import '../services/hive_storage_service.dart';
 import '../sources/music_source.dart';
+import '../sources/radio_source.dart';
 import 'player_controller_state.dart';
 
 /// Coordinates search, playback, fallback, queue, library and timers.
@@ -23,7 +26,11 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
     required SearchAggregator aggregator,
     required MusicSource? Function(String id) sourceById,
     AudioService? audioService,
+    PlaybackLedger? ledger,
+    RadioSource? radio,
   })  : _aggregator = aggregator,
+        _radio = radio,
+        _ledger = ledger ?? MemoryPlaybackLedger(),
         _sourceById = sourceById,
         _audioService = audioService ?? AudioService.instance,
         _planner = FallbackPlanner(aggregator),
@@ -32,9 +39,13 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
   }
 
   final SearchAggregator _aggregator;
+  final RadioSource? _radio;
   final MusicSource? Function(String id) _sourceById;
   final AudioService _audioService;
   final FallbackPlanner _planner;
+
+  /// Recordings that actually played (drives the "Full track" label).
+  final PlaybackLedger _ledger;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
 
   DateTime? _lastPositionSavedAt;
@@ -42,7 +53,13 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
   /// True while a new queue is being loaded; suppresses stale position events
   /// and lets [playPlaylist] handle load errors itself.
   bool _isSettingAudioSource = false;
-  bool _handlingError = false;
+  /// Serialises recovery; an error that arrives mid-recovery (e.g. the
+  /// replacement stream failing to load) is queued, not dropped.
+  late final SerialErrorGate<({int? index, String? songId, PlayerException? error})> _errorGate =
+      SerialErrorGate(_recover);
+
+  /// Notice to show once the switched-to source has actually started.
+  ({String songId, String message})? _pendingSwitchNotice;
   Timer? _bufferingTimeoutTimer;
   Timer? _sleepTimer;
   Timer? _noticeTimer;
@@ -248,6 +265,17 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
     if (_historyRecordedFor == marker) return;
     _historyRecordedFor = marker;
     _planner.markSuccess(song);
+    if (song.isRadio) {
+      // Live stations: count the click for the directory; nothing to verify.
+      unawaited(_radio?.reportPlay(song) ?? Future<void>.value());
+    } else if (!song.isLocal) {
+      unawaited(_ledger.recordPlayed(song.id));
+    }
+    final notice = _pendingSwitchNotice;
+    if (notice != null && notice.songId == song.id) {
+      _pendingSwitchNotice = null;
+      _showNotice(notice.message);
+    }
     final ref = _references[song.id];
     if (ref != null) unawaited(_aggregator.rememberSuccess(ref, song));
     if (!(kIsWeb && song.isLocal)) {
@@ -272,14 +300,19 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
     }
     state = state.copyWith(isSearchLoading: true, clearSearchError: true);
     try {
-      final result = await _aggregator.search(q);
-      if (requestId != _searchRequestId) return result;
+      // A newer query cancels this one before its next provider request.
+      final result = await _aggregator.search(
+        q,
+        isCancelled: () => requestId != _searchRequestId,
+      );
+      if (requestId != _searchRequestId || result.cancelled) return result;
       state = state.copyWith(
         searchResult: result,
         searchResults: result.playableSongs,
         isSearchLoading: false,
         searchError: result.allSourcesFailed
             ? 'Music services are unreachable. Check your connection and try again.'
+                '${_failureDetail()}'
             : null,
         clearSearchError: !result.allSourcesFailed,
       );
@@ -294,24 +327,39 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
     }
   }
 
+  /// Short technical reason (e.g. "Failed host lookup") shown under the
+  /// friendly message so connection problems can be diagnosed from a
+  /// screenshot.
+  String _failureDetail() {
+    final details = _aggregator.lastFailureDetails.values;
+    if (details.isEmpty) return '';
+    final first = details.first.replaceAll(RegExp(r'\s+'), ' ');
+    return '\n\n(${first.length > 140 ? '${first.substring(0, 140)}…' : first})';
+  }
+
   /// Back-compat name used by older widgets.
   Future<void> searchSongs(String query) => search(query);
 
   // ── Starting playback ──────────────────────────────────────────────────
 
-  /// Plays search results starting at [index]. Catalogue-only tracks in the
-  /// list are skipped; if the tapped one is catalogue-only, an authorised
-  /// stream for the same recording is looked up first.
+  /// Plays the tapped track. If it is catalogue-only, a verified authorised
+  /// stream of the *same recording* is looked up first; if none exists,
+  /// nothing plays (an unrelated recording is never substituted).
+  ///
+  /// [queueAll] also queues the list's other playable tracks (artist and
+  /// album pages). Search results play only the chosen track.
   Future<bool> playMatched(
     List<MatchedTrack> tracks,
     int index, {
     bool reportUnavailable = true,
+    bool queueAll = true,
   }) async {
     if (index < 0 || index >= tracks.length) return false;
     final tapped = tracks[index];
     final queue = <Song>[];
     var start = 0;
     for (var i = 0; i < tracks.length; i++) {
+      if (!queueAll && i != index) continue;
       final t = tracks[i];
       Song? song;
       if (t.isPlayable) {
@@ -338,6 +386,9 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
       if (!state.isPlaying) await resume();
       return true;
     }
+    // Official external players (YouTube…) open in their own app/page via
+    // the UI — their URLs are never handed to the audio player.
+    if (song.isExternal) return false;
     final playable = song.canPlay ? song : await _resolveCatalogueTrack(song);
     if (playable == null) return false;
     final idx = state.queue.indexWhere((s) => s.id == playable.id);
@@ -352,17 +403,14 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
   Future<Song?> _resolveCatalogueTrack(Song reference, {bool report = true}) async {
     state = state.copyWith(isResolving: true, clearError: true);
     try {
-      final found = await _aggregator.findPlayableFor(reference);
-      if (found.isEmpty) {
+      final d = await _aggregator.discover(reference);
+      if (!d.found) {
         if (!report) return null;
-        _setError(
-          '“${reference.title}” isn’t available from an authorised streaming '
-          'source in this app.',
-        );
+        _setError('“${reference.title}” — ${d.explanation}');
         return null;
       }
-      final best = found.first;
-      _planner.registerCandidates(best, found);
+      final best = d.playable!;
+      _planner.registerCandidates(best, [best, ...d.alternates]);
       _references[best.id] = reference;
       return best;
     } catch (_) {
@@ -457,40 +505,80 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
 
   // ── Failure recovery / fallback ────────────────────────────────────────
 
-  Future<void> _onPlaybackError(int? index, PlayerException? error) async {
-    if (_handlingError) return;
+  /// Reports a playback failure. Recovery runs one at a time; see
+  /// [_recover] for the steps.
+  Future<void> _onPlaybackError(int? index, PlayerException? error) {
+    final songId = index != null && index >= 0 && index < state.queue.length
+        ? state.queue[index].id
+        : null;
+    return _errorGate.report((index: index, songId: songId, error: error));
+  }
+
+  Future<void> _recover(({int? index, String? songId, PlayerException? error}) report) async {
+    final index = report.index;
+    final error = report.error;
     if (index == null || index < 0 || index >= state.queue.length) {
       _setError('Playback failed. Tap retry.');
       return;
     }
-    _handlingError = true;
+    // A queued error about a source that has since been replaced is stale.
+    if (report.songId != null && state.queue[index].id != report.songId) return;
     try {
       final failed = state.queue[index];
       debugPrint('[PlayerController] playback error on ${failed.id}: $error');
       final hadStarted = state.currentIndex == index &&
           state.position > const Duration(seconds: 2);
 
-      // 1. Transient mid-stream drop → retry same source from where it was.
-      if (_planner.shouldRetrySame(failed, hadStarted: hadStarted)) {
-        final resumeAt = state.position;
+      // 1. Retry the same source once (from where it was, if it had started).
+      //    The stream URL is resolved again first: signed / time-limited
+      //    URLs (expired links) get a fresh one from the provider.
+      if (_planner.shouldRetrySame(failed)) {
+        final resumeAt = hadStarted && !failed.isRadio ? state.position : Duration.zero;
         await Future<void>.delayed(const Duration(milliseconds: 1500));
         try {
-          await _audioService.replace(index, failed);
+          final fresh = await _refreshStream(failed);
+          if (fresh.audioUrl != failed.audioUrl) {
+            final q = [...state.queue]..[index] = fresh;
+            state = state.copyWith(
+              queue: q,
+              currentSong: state.currentIndex == index ? fresh : state.currentSong,
+            );
+          }
+          await _audioService.replace(index, fresh);
           await _player.seek(resumeAt, index: index);
-          await _player.play();
+          // Not awaited: play() completes only when playback stops, which
+          // would keep recovery "busy" and swallow the next failure.
+          unawaited(_player.play());
           return;
         } catch (_) {/* fall through to alternatives */}
       }
 
+      // Local files and live radio have no other source of the same
+      // recording: stop and explain.
+      if (failed.isLocal || failed.isRadio) {
+        await _player.pause();
+        _setError(failed.isRadio
+            ? '“${failed.title}” is off air or unreachable right now.'
+            : 'Couldn’t play “${failed.title}” from this device.');
+        return;
+      }
+
+      // The player could not use this stream even after a retry: make sure
+      // a cached 2-byte check or discovery result doesn't offer it again.
+      _aggregator.verifier.markUnplayable(failed.id, reason: '$error');
+      unawaited(_ledger.recordFailed(failed.id));
+
       // 2/3. Another authorised source for the same recording.
       state = state.copyWith(isResolving: true);
-      var alt = await _planner.nextFor(failed);
+      final reference = _references[failed.id];
+      var alt = await _planner.nextFor(failed, reference: reference);
       while (alt != null) {
         final resolved = (await _resolveLazyStreams([alt], mustResolve: alt));
         if (resolved.isNotEmpty) {
           final next = resolved.first;
           try {
-            await _audioService.replace(index, next);
+            // Update state first so an error raised while the new source
+            // loads is attributed to it (not discarded as stale).
             final q = [...state.queue]..[index] = next;
             final ref = _references[failed.id];
             if (ref != null) _references[next.id] = ref;
@@ -501,34 +589,53 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
                 fallbackCount: state.diagnostics.fallbackCount + 1,
               ),
             );
+            // Announced only once the new source has actually started.
+            _pendingSwitchNotice = (
+              songId: next.id,
+              message: next.isPreview
+                  ? 'Full track unavailable — playing a preview'
+                  : 'Switched to ${_sourceName(next.sourceId)} for this song',
+            );
+            await _audioService.replace(index, next);
             await _player.seek(Duration.zero, index: index);
             unawaited(_player.play());
-            _showNotice(next.isPreview
-                ? 'Full track unavailable — playing a preview'
-                : 'Switched to ${_sourceName(next.sourceId)} for this song');
             return;
-          } catch (_) {/* try the next alternative */}
+          } catch (_) {
+            _aggregator.verifier.markUnplayable(next.id, reason: 'load failed');
+            unawaited(_ledger.recordFailed(next.id));
+          }
         }
-        alt = await _planner.nextFor(failed);
+        alt = await _planner.nextFor(failed, reference: reference);
       }
 
-      // 4. Give up on this song.
+      // 4. No valid source of this recording: stop and explain. Never move
+      //    on to a different song or recording by itself.
       state = state.copyWith(
         diagnostics: state.diagnostics.copyWith(
           failedCount: state.diagnostics.failedCount + 1,
         ),
       );
-      if (_player.hasNext) {
-        await _player.seekToNext();
-        unawaited(_player.play());
-        _showNotice('Couldn’t play “${failed.title}” — skipped');
-      } else {
-        await _player.pause();
-        _setError('Couldn’t play “${failed.title}”. Check your connection and retry.');
-      }
+      await _player.pause();
+      final why = _planner.explanation.isEmpty
+          ? 'No authorised source could play it. Check your connection and retry.'
+          : _planner.explanation;
+      _setError('Couldn’t play “${failed.title}”. $why');
     } finally {
       state = state.copyWith(isResolving: false);
-      _handlingError = false;
+    }
+  }
+
+  /// Asks the owning provider for a fresh stream URL (expired links).
+  /// Returns [song] unchanged when the provider has nothing newer.
+  Future<Song> _refreshStream(Song song) async {
+    if (song.isLocal || song.isRadio) return song;
+    final source = _sourceById(song.sourceId);
+    if (source == null) return song;
+    try {
+      final uri = await source.resolveStream(song).timeout(const Duration(seconds: 8));
+      return uri == null ? song : song.copyWith(audioUrl: uri.toString());
+    } catch (_) {
+      return song;
     }
   }
 

@@ -14,6 +14,36 @@ enum CommercialStatus {
   requiresAgreement,
 }
 
+/// The four provider categories. A provider's kind decides which part of
+/// the app may use it; metadata and external providers are never treated as
+/// audio sources, and radio never appears in song search.
+enum SourceKind {
+  /// Direct audio streams for authorised recordings (Audius, Archive…).
+  fullTrack,
+
+  /// Catalogue / discovery data only (iTunes, MusicBrainz…).
+  metadata,
+
+  /// Playback only in the provider's official player (YouTube…).
+  externalPlayer,
+
+  /// Live internet radio (separate Radio feature).
+  radio,
+}
+
+/// What a provider can actually do. Declared explicitly per provider.
+enum SourceCapability {
+  metadata,
+  artwork,
+  previewAudio,
+  fullTrackStream,
+  externalPlayer,
+  liveRadio,
+  lyrics,
+  artistInfo,
+  isrc,
+}
+
 /// Static description of a provider — used by the registry, the settings
 /// screen and the licensing matrix.
 class SourceInfo {
@@ -25,7 +55,29 @@ class SourceInfo {
     required this.commercialStatus,
     required this.attribution,
     required this.homepage,
-  });
+    SourceKind? kind,
+    this.capabilities = const {},
+    this.perTrackLicence = false,
+    this.experimental = false,
+  }) : _kind = kind;
+
+  final SourceKind? _kind;
+
+  /// Category; defaults from [fullTracks] for providers declared before
+  /// kinds existed.
+  SourceKind get kind => _kind ?? (fullTracks ? SourceKind.fullTrack : SourceKind.metadata);
+
+  /// Declared capabilities.
+  final Set<SourceCapability> capabilities;
+
+  /// Each track carries its own licence that must be checked before playback
+  /// (Internet Archive, Jamendo, Free To Use).
+  final bool perTrackLicence;
+
+  /// Shown as experimental; off unless explicitly enabled.
+  final bool experimental;
+
+  bool can(SourceCapability c) => capabilities.contains(c);
 
   final String id;
   final String displayName;

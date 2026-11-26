@@ -9,6 +9,8 @@ final playerControllerProvider =
   return PlayerController(
     aggregator: ref.watch(searchAggregatorProvider),
     sourceById: (id) => ref.read(sourceByIdProvider(id)),
+    ledger: ref.read(playbackLedgerProvider),
+    radio: ref.read(radioSourceProvider),
   );
 });
 

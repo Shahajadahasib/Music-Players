@@ -50,6 +50,34 @@ abstract final class AppConfig {
   static const bool internetArchive =
       bool.fromEnvironment('INTERNET_ARCHIVE', defaultValue: true);
 
+  /// Free To Use (freetouse.com): free use requires attribution and excludes
+  /// commercial digital products; a paid Commercial plan is required for this
+  /// app. Set true **only** with an active Free To Use commercial licence.
+  static const bool freeToUseCommercialLicence =
+      bool.fromEnvironment('FREETOUSE_COMMERCIAL_LICENSE');
+
+  /// MusicBrainz web service: free for non-commercial use; commercial use
+  /// requires a MetaBrainz plan. Set true once you have one.
+  static const bool musicBrainzEnabled = bool.fromEnvironment('MUSICBRAINZ_ENABLED');
+
+  /// Contact for the MusicBrainz User-Agent (required by their rules).
+  static const String musicBrainzContact =
+      String.fromEnvironment('MUSICBRAINZ_CONTACT', defaultValue: 'support@example.com');
+
+  /// YouTube Data API v3 key (restrict it to your app in Google Cloud).
+  /// Used only to find official videos for the official YouTube player.
+  static const String youtubeApiKey = String.fromEnvironment('YOUTUBE_API_KEY');
+
+  /// Live radio directory (Radio Browser). Separate Radio feature.
+  static const bool radioEnabled = bool.fromEnvironment('RADIO', defaultValue: true);
+
+  /// Full-track provider order, comma-separated ids. Providers not listed
+  /// keep their default order after the listed ones.
+  static const String providerPriority = String.fromEnvironment(
+    'PROVIDER_PRIORITY',
+    defaultValue: 'audius,jamendo,freetouse,archive',
+  );
+
   // ── Licensing / purchase ─────────────────────────────────────────────────
 
   /// `freemium` — free tier + one-time "Premium" unlock (in-app purchase on

@@ -33,6 +33,9 @@ class ItunesSource extends MusicSource {
     commercialStatus: CommercialStatus.promotionalOnly,
     attribution: 'Song information from Apple',
     homepage: 'https://music.apple.com',
+    kind: SourceKind.metadata,
+    capabilities: {SourceCapability.metadata, SourceCapability.artwork, SourceCapability.previewAudio, SourceCapability.artistInfo},
+    perTrackLicence: false,
   );
 
   @override
