@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import '../models/song.dart';
+import 'artist_aliases.dart';
 import 'text_normalizer.dart';
 
 /// Why a candidate was or wasn't accepted as the requested recording.
@@ -11,6 +12,13 @@ enum RecordingVerdict {
   differentArtist,
   unrequestedVersion,
   durationMismatch,
+
+  /// Both have ISRCs and they differ: different recordings.
+  differentIsrc,
+
+  /// Title/artist only match as transliteration variants, and there is no
+  /// duration or ISRC agreement to confirm it is the same recording.
+  transliterationUnconfirmed,
 }
 
 class RecordingMatch {
@@ -78,10 +86,23 @@ class TrackMatcher {
       return RecordingMatch(RecordingVerdict.unrequestedVersion, detail: 'missing ${missing.join(',')}');
     }
 
+    // ISRC identifies one recording: equal → same, different → different.
+    final ri = _isrc(reference.isrc), ci = _isrc(candidate.isrc);
+    final isrcMatch = ri.isNotEmpty && ri == ci;
+    if (ri.isNotEmpty && ci.isNotEmpty && !isrcMatch) {
+      return RecordingMatch(RecordingVerdict.differentIsrc, detail: '$ci vs $ri');
+    }
+
     final rt = TextNormalizer.title(reference.title);
     final ct = TextNormalizer.title(candidate.title);
-    final titleSim = rt == ct ? 1.0 : _levRatio(rt, ct);
-    if (titleSim < titleThreshold) {
+    var titleSim = rt == ct ? 1.0 : _levRatio(rt, ct);
+    var viaTransliteration = false;
+    if (titleSim < titleThreshold && sameSpellingFamily(rt, ct)) {
+      // "Hashnahena" / "হাসনাহেনা": same title in another spelling or script.
+      titleSim = 0.9;
+      viaTransliteration = true;
+    }
+    if (titleSim < titleThreshold && !viaTransliteration) {
       return RecordingMatch(RecordingVerdict.differentTitle, detail: '"$ct" vs "$rt"');
     }
 
@@ -90,16 +111,30 @@ class TrackMatcher {
     if (refArtists.isEmpty || candArtists.isEmpty) {
       return const RecordingMatch(RecordingVerdict.missingArtist);
     }
-    final primary = TextNormalizer.basic(_primaryArtist(reference.artist));
+    final primaryRaw = _primaryArtist(reference.artist);
+    final primary = TextNormalizer.basic(primaryRaw);
     var artistSim = 0.0;
     for (final c in candArtists) {
       artistSim = math.max(artistSim, _artistSimilarity(primary, c));
+    }
+    if (artistSim < artistThreshold) {
+      // Known alias in another script / spelling ("জেমস" = "James").
+      if (ArtistAliases.sameArtist(primaryRaw, candidate.artist) ||
+          candArtists.any((c) => ArtistAliases.sameArtist(primary, c))) {
+        artistSim = 1;
+      } else if (candArtists.any((c) => sameSpellingFamily(primary, c))) {
+        artistSim = 0.9;
+        viaTransliteration = true;
+      }
     }
     if (artistSim < artistThreshold) {
       return RecordingMatch(
         RecordingVerdict.differentArtist,
         detail: '"${candidate.artist}" vs "${reference.artist}"',
       );
+    }
+    if (isrcMatch) {
+      return const RecordingMatch(RecordingVerdict.exact, score: 1);
     }
 
     final dr = reference.duration, dc = candidate.duration;
@@ -116,6 +151,14 @@ class TrackMatcher {
       durationScore = 1 - diff.inMilliseconds / durationTolerance.inMilliseconds;
     }
 
+    // A spelling-variant match is only trusted when the durations agree.
+    if (viaTransliteration && durationScore == 0.5) {
+      return const RecordingMatch(
+        RecordingVerdict.transliterationUnconfirmed,
+        detail: 'spelling variant without duration/ISRC confirmation',
+      );
+    }
+
     final albumMatch = reference.album.isNotEmpty &&
         candidate.album.isNotEmpty &&
         TextNormalizer.title(reference.album) == TextNormalizer.title(candidate.album);
@@ -124,6 +167,20 @@ class TrackMatcher {
       score: (0.5 * titleSim + 0.3 * durationScore + (albumMatch ? 0.2 : 0)).clamp(0.0, 1.0),
     );
   }
+
+  /// Same title/name written in another spelling or script: equal phonetic
+  /// keys *and* broadly similar Latin spelling (guards very short keys such
+  /// as "Maya" → "m"). This is a hint, never proof of the same recording.
+  static bool sameSpellingFamily(String a, String b) {
+    if (a.isEmpty || b.isEmpty) return false;
+    final ka = TextNormalizer.phoneticKey(a), kb = TextNormalizer.phoneticKey(b);
+    if (ka.isEmpty || ka != kb) return false;
+    final la = TextNormalizer.basic(TextNormalizer.bengaliToLatin(a)).replaceAll(' ', '');
+    final lb = TextNormalizer.basic(TextNormalizer.bengaliToLatin(b)).replaceAll(' ', '');
+    return _levRatio(la, lb) >= 0.6;
+  }
+
+  static String _isrc(String v) => v.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
 
   bool isSameRecording(Song reference, Song candidate, {String query = ''}) =>
       matchRecording(reference, candidate, query: query).isExact;
@@ -174,7 +231,18 @@ class TrackMatcher {
   bool isSameSong(Song a, Song b) => sameSong(a, b) >= matchThreshold;
 
   /// 0..1 — how well [song] answers [query] ("bohemian rhapsody queen").
+  /// Bengali-script and transliterated queries are compared through artist
+  /// aliases and phonetic keys, so "শিরোনামহীন" finds "Shironamhin".
   double relevance(String query, Song song) {
+    var best = _relevance(query, song);
+    if (best >= 0.95) return best;
+    for (final v in ArtistAliases.queryVariants(query).skip(1)) {
+      best = math.max(best, _relevance(v, song));
+    }
+    return best;
+  }
+
+  double _relevance(String query, Song song) {
     final q = TextNormalizer.basic(query);
     if (q.isEmpty) return 0;
     final qTokens = TextNormalizer.tokens(q);
@@ -191,6 +259,8 @@ class TrackMatcher {
         covered += 1;
       } else if (all.any((w) => w.length > 3 && (w.startsWith(t) || _lev(w, t) <= 1))) {
         covered += 0.7;
+      } else if (t.length >= 3 && all.any((w) => sameSpellingFamily(w, t))) {
+        covered += 0.8; // transliteration / other script
       }
     }
     final coverage = covered / qTokens.length;

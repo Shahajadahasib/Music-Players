@@ -67,6 +67,7 @@ class AvailabilityBadge extends StatelessWidget {
       Playability.local => ('On device', p.accent, Icons.phone_iphone_rounded),
       Playability.preview => ('Preview', p.warning, Icons.timelapse_rounded),
       Playability.none => ('Not streamable', p.textTertiary, Icons.block_rounded),
+      Playability.external => ('External player', p.accentAlt, Icons.open_in_new_rounded),
     };
     if (compact && playability == Playability.full) return const SizedBox.shrink();
     return Semantics(
@@ -94,7 +95,21 @@ class AvailabilityBadge extends StatelessWidget {
 }
 
 /// What the user can do with a search result, after verification.
-enum TrackStatus { full, checking, unverified, preview, unavailable, originalUnavailable, local }
+/// * [full] — the recording has actually played in this app before.
+/// * [unverified] — the stream answered with audio, but has not been played
+///   yet (an HTTP check alone doesn't prove the whole recording plays).
+enum TrackStatus {
+  full,
+  checking,
+  unverified,
+  preview,
+  metadataOnly,
+  externalPlayer,
+  unavailable,
+  licenceNotVerified,
+  originalUnavailable,
+  local,
+}
 
 /// Badge for [TrackStatus] — every result says plainly whether it plays.
 class StatusBadge extends StatelessWidget {
@@ -109,6 +124,9 @@ class StatusBadge extends StatelessWidget {
       TrackStatus.checking => ('Checking…', p.textTertiary, Icons.more_horiz_rounded),
       TrackStatus.unverified => ('Not verified', p.warning, Icons.help_outline_rounded),
       TrackStatus.preview => ('Preview', p.warning, Icons.timelapse_rounded),
+      TrackStatus.metadataOnly => ('Metadata only', p.textTertiary, Icons.info_outline_rounded),
+      TrackStatus.externalPlayer => ('External player', p.accentAlt, Icons.open_in_new_rounded),
+      TrackStatus.licenceNotVerified => ('Licence not verified', p.warning, Icons.gpp_maybe_outlined),
       TrackStatus.unavailable => ('Not streamable', p.textTertiary, Icons.block_rounded),
       TrackStatus.originalUnavailable => ('Not available', p.danger, Icons.block_rounded),
       TrackStatus.local => ('On device', p.accent, Icons.phone_iphone_rounded),

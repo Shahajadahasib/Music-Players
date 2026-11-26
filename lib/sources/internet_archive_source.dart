@@ -24,6 +24,9 @@ class InternetArchiveSource extends MusicSource {
     commercialStatus: CommercialStatus.permitted,
     attribution: 'Audio from the Internet Archive — see licence on each item',
     homepage: 'https://archive.org',
+    kind: SourceKind.fullTrack,
+    capabilities: {SourceCapability.metadata, SourceCapability.artwork, SourceCapability.fullTrackStream},
+    perTrackLicence: true,
   );
 
   /// Lucene clause selecting commercially re-usable licences only.

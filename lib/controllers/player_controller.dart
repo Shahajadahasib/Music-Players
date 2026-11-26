@@ -7,6 +7,7 @@ import 'package:just_audio/just_audio.dart';
 import '../models/song.dart';
 import '../playback/error_gate.dart';
 import '../playback/fallback_planner.dart';
+import '../playback/playback_ledger.dart';
 import '../search/matched_track.dart';
 import '../search/search_aggregator.dart';
 import '../services/audio_service.dart';
@@ -24,7 +25,9 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
     required SearchAggregator aggregator,
     required MusicSource? Function(String id) sourceById,
     AudioService? audioService,
+    PlaybackLedger? ledger,
   })  : _aggregator = aggregator,
+        _ledger = ledger ?? MemoryPlaybackLedger(),
         _sourceById = sourceById,
         _audioService = audioService ?? AudioService.instance,
         _planner = FallbackPlanner(aggregator),
@@ -36,6 +39,9 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
   final MusicSource? Function(String id) _sourceById;
   final AudioService _audioService;
   final FallbackPlanner _planner;
+
+  /// Recordings that actually played (drives the "Full track" label).
+  final PlaybackLedger _ledger;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
 
   DateTime? _lastPositionSavedAt;
@@ -255,6 +261,7 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
     if (_historyRecordedFor == marker) return;
     _historyRecordedFor = marker;
     _planner.markSuccess(song);
+    if (!song.isLocal) unawaited(_ledger.recordPlayed(song.id));
     final notice = _pendingSwitchNotice;
     if (notice != null && notice.songId == song.id) {
       _pendingSwitchNotice = null;
@@ -527,6 +534,7 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
       // The player could not use this stream even after a retry: make sure
       // a cached 2-byte check or discovery result doesn't offer it again.
       _aggregator.verifier.markUnplayable(failed.id, reason: '$error');
+      unawaited(_ledger.recordFailed(failed.id));
 
       // 2/3. Another authorised source for the same recording.
       state = state.copyWith(isResolving: true);
@@ -562,6 +570,7 @@ class PlayerController extends StateNotifier<PlayerControllerState> {
             return;
           } catch (_) {
             _aggregator.verifier.markUnplayable(next.id, reason: 'load failed');
+            unawaited(_ledger.recordFailed(next.id));
           }
         }
         alt = await _planner.nextFor(failed, reference: reference);

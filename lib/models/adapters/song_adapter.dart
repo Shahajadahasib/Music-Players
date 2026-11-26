@@ -8,12 +8,13 @@ import '../song.dart';
 ///                    hasDuration, [durationMs]
 /// v2 (appended):     schemaVersion(=2), sourceId, playabilityIndex,
 ///                    externalUrl, license, artistId, albumId
+/// v3 (appended):     isrc   (schemaVersion byte = 3)
 ///
 /// Hive bounds each frame, so a v1 record simply has no bytes left after the
 /// duration and is read with v2 defaults (an Audius full-track stream, which
 /// is what the original app stored).
 class SongAdapter extends TypeAdapter<Song> {
-  static const int _schemaVersion = 2;
+  static const int _schemaVersion = 3;
 
   @override
   final int typeId = 0;
@@ -59,6 +60,9 @@ class SongAdapter extends TypeAdapter<Song> {
           albumId: albumId,
         );
       }
+      if (version >= 3) {
+        song = song.copyWith(isrc: reader.readString());
+      }
     }
     return song;
   }
@@ -82,5 +86,6 @@ class SongAdapter extends TypeAdapter<Song> {
     writer.writeString(obj.license);
     writer.writeString(obj.artistId);
     writer.writeString(obj.albumId);
+    writer.writeString(obj.isrc);
   }
 }

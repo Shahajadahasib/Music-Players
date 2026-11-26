@@ -26,6 +26,9 @@ class JamendoSource extends MusicSource {
     commercialStatus: CommercialStatus.requiresAgreement,
     attribution: 'Music from Jamendo (Creative Commons)',
     homepage: 'https://www.jamendo.com',
+    kind: SourceKind.fullTrack,
+    capabilities: {SourceCapability.metadata, SourceCapability.artwork, SourceCapability.fullTrackStream, SourceCapability.artistInfo},
+    perTrackLicence: true,
   );
 
   static bool get isConfigured =>

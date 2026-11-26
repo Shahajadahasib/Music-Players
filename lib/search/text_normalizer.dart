@@ -76,6 +76,12 @@ abstract final class TextNormalizer {
     'lofi': 'lofi',
     'lo-fi': 'lofi',
     'lo fi': 'lofi',
+    // Bengali spellings of version words
+    'কভার': 'cover',
+    'লাইভ': 'live',
+    'রিমিক্স': 'remix',
+    'কারাওকে': 'karaoke',
+    'ইন্সট্রুমেন্টাল': 'instrumental',
   };
 
   /// Qualifiers that do NOT change the recording and are simply dropped.
@@ -91,7 +97,11 @@ abstract final class TextNormalizer {
     r'|\s+\b(feat\.?|ft\.?|featuring)\s+[^\(\[\-]*',
   );
   static final RegExp _brackets = RegExp(r'[\(\[\{]([^\)\]\}]*)[\)\]\}]');
-  static final RegExp _nonWord = RegExp(r"[^a-z0-9\s]");
+  // Unicode-aware: keeps letters, combining marks (Bengali vowel signs) and
+  // digits of every script. The old ASCII-only pattern erased Bengali text.
+  static final RegExp _nonWord = RegExp(r"[^\p{L}\p{M}\p{N}\s]", unicode: true);
+  static final RegExp _nonWordRun = RegExp(r"[^\p{L}\p{M}\p{N}]+", unicode: true);
+  static final RegExp _bengali = RegExp(r"[\u0980-\u09FF]");
   static final RegExp _spaces = RegExp(r'\s+');
 
   static String foldDiacritics(String input) {
@@ -113,10 +123,10 @@ abstract final class TextNormalizer {
 
   /// Version tags (live, remix, violin, …) found anywhere in [title].
   static Set<String> versionTags(String title) {
-    final lower = ' ${foldDiacritics(title.toLowerCase()).replaceAll(RegExp(r'[^a-z0-9]+'), ' ')} ';
+    final lower = ' ${foldDiacritics(title.toLowerCase()).replaceAll(_nonWordRun, ' ')} ';
     final tags = <String>{};
     for (final entry in _versionKeywords.entries) {
-      final key = entry.key.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
+      final key = entry.key.replaceAll(_nonWordRun, ' ');
       if (lower.contains(' $key ')) tags.add(entry.value);
     }
     // "Radio edit" / "single edit" are the same recording, trimmed.
@@ -178,5 +188,90 @@ abstract final class TextNormalizer {
   static String songKey(String title, String artist) {
     final a = artists(artist).toList()..sort();
     return '${TextNormalizer.title(title)}|${a.isEmpty ? '' : a.first}';
+  }
+
+  // ── Bengali script & transliteration ────────────────────────────────────
+
+  /// True when [input] contains Bengali script.
+  static bool containsBengali(String input) => _bengali.hasMatch(input);
+
+  static const Map<String, String> _bnVowels = {
+    'অ': 'a', 'আ': 'a', 'ই': 'i', 'ঈ': 'i', 'উ': 'u', 'ঊ': 'u', 'ঋ': 'ri',
+    'এ': 'e', 'ঐ': 'oi', 'ও': 'o', 'ঔ': 'ou',
+  };
+  static const Map<String, String> _bnSigns = {
+    'া': 'a', 'ি': 'i', 'ী': 'i', 'ু': 'u', 'ূ': 'u', 'ৃ': 'ri', 'ে': 'e',
+    'ৈ': 'oi', 'ো': 'o', 'ৌ': 'ou',
+  };
+  static const Map<String, String> _bnConsonants = {
+    'ক': 'k', 'খ': 'kh', 'গ': 'g', 'ঘ': 'gh', 'ঙ': 'ng', 'চ': 'ch', 'ছ': 'chh',
+    'জ': 'j', 'ঝ': 'jh', 'ঞ': 'n', 'ট': 't', 'ঠ': 'th', 'ড': 'd', 'ঢ': 'dh',
+    'ণ': 'n', 'ত': 't', 'থ': 'th', 'দ': 'd', 'ধ': 'dh', 'ন': 'n', 'প': 'p',
+    'ফ': 'ph', 'ব': 'b', 'ভ': 'bh', 'ম': 'm', 'য': 'j', 'র': 'r', 'ল': 'l',
+    'শ': 'sh', 'ষ': 'sh', 'স': 's', 'হ': 'h',
+    '\u09DC': 'r', '\u09DD': 'rh', '\u09DF': 'y', // ড় ঢ় য় (precomposed)
+  };
+  static const Map<String, String> _bnOther = {
+    'ৎ': 't', 'ং': 'ng', 'ঃ': 'h', 'ঁ': '', '্': '', '়': '',
+    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6',
+    '৭': '7', '৮': '8', '৯': '9',
+  };
+
+  /// Readable Latin transliteration of Bengali script (other characters are
+  /// kept). Consonants carry the inherent vowel unless a vowel sign or
+  /// hasanta follows or they end a word. It is approximate by design: it is
+  /// used to *compare* spellings, never to claim two recordings are the same.
+  static String bengaliToLatin(String input) {
+    if (!containsBengali(input)) return input;
+    // Normalise precomposed nukta letters (ড় ঢ় য়) to single keys.
+    final text = input
+        .replaceAll('\u09A1\u09BC', '\u09DC')
+        .replaceAll('\u09A2\u09BC', '\u09DD')
+        .replaceAll('\u09AF\u09BC', '\u09DF');
+    final chars = text.runes.map(String.fromCharCode).toList();
+    final out = StringBuffer();
+    for (var i = 0; i < chars.length; i++) {
+      final c = chars[i];
+      final next = i + 1 < chars.length ? chars[i + 1] : '';
+      final cons = _bnConsonants[c];
+      if (cons != null) {
+        final prev = i > 0 ? chars[i - 1] : '';
+        // য-ফলা (consonant + ্ + য) is pronounced like "y".
+        out.write(c == 'য' && prev == '্' ? 'y' : cons);
+        final endOfWord = next.isEmpty || !_isBengaliLetter(next);
+        if (!_bnSigns.containsKey(next) && next != '্' && !endOfWord &&
+            !_bnOther.containsKey(next)) {
+          out.write('a'); // inherent vowel
+        }
+        continue;
+      }
+      out.write(_bnVowels[c] ?? _bnSigns[c] ?? _bnOther[c] ?? c);
+    }
+    return out.toString();
+  }
+
+  static bool _isBengaliLetter(String c) => _bnConsonants.containsKey(c) ||
+      _bnVowels.containsKey(c) || _bnSigns.containsKey(c) || c == '্' || c == 'ং' || c == 'ঁ' || c == 'ৎ';
+
+  /// Spelling-tolerant key for comparing transliterations, e.g.
+  /// "Hashnahena" = "Hasnahena" = "হাসনাহেনা", "Kolorob" = "কলরব",
+  /// "Bachchu" = "Bacchu". Vowels a/o (the Bengali inherent vowel), y/w and
+  /// aspiration "h" after consonants are ignored; doubled letters collapse.
+  /// Equal keys mean "same spelling family", NOT "same recording".
+  static String phoneticKey(String input) {
+    var s = basic(bengaliToLatin(input));
+    s = s
+        .replaceAllMapped(RegExp(r'([bcdgjkpstr])h'), (m) => m.group(1)!)
+        .replaceAll('ee', 'i')
+        .replaceAll('oo', 'u')
+        .replaceAll('ph', 'p')
+        .replaceAll('f', 'p')
+        .replaceAll('v', 'b')
+        .replaceAll('z', 'j')
+        .replaceAll('q', 'k')
+        .replaceAll('x', 'ks')
+        .replaceAll(RegExp(r'[aoyw]'), '');
+    s = s.replaceAllMapped(RegExp(r'(.)\1+'), (m) => m.group(1)!);
+    return s.replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 }

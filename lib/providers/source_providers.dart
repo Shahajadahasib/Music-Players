@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/app_config.dart';
+import '../playback/playback_ledger.dart';
 import '../playback/stream_verifier.dart';
 import '../models/song.dart';
 import '../search/search_aggregator.dart';
@@ -50,7 +51,10 @@ class HiveMatchMemory implements MatchMemory {
   }
 }
 
-/// Confirms streams really load before they are labelled "Full track".
+/// Recordings that actually played (only these are labelled "Full track").
+final playbackLedgerProvider = Provider<PlaybackLedger>((ref) => HivePlaybackLedger());
+
+/// Checks a stream answers with audio before it is offered (pre-filter).
 final streamVerifierProvider = Provider<StreamVerifier>((ref) {
   return HttpStreamVerifier(sourceById: (id) => ref.read(sourceByIdProvider(id)));
 });

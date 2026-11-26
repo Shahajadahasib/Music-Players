@@ -5,6 +5,7 @@ import '../../models/song.dart';
 import '../../playback/stream_verifier.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/source_providers.dart';
+import '../../sources/music_source.dart';
 import '../../search/matched_track.dart';
 import '../../theme/aurora_theme.dart';
 import 'artwork_image.dart';
@@ -157,34 +158,48 @@ class SongTile extends ConsumerWidget {
     );
   }
 
-  /// Status for the badge. Search results are only "Full track" once the
-  /// stream has been verified (during discovery, or lazily here).
+  /// Status for the badge.
+  ///
+  /// "Full track" means this exact recording has **actually played** in the
+  /// app (playback ledger). A stream that only passed the HTTP check is
+  /// "Not verified"; it becomes "Full track" after its first real playback.
   TrackStatus _status(WidgetRef ref) {
+    final ledger = ref.read(playbackLedgerProvider);
     final t = track;
     if (t == null) {
       return switch (song.playability) {
         Playability.full => TrackStatus.full,
         Playability.preview => TrackStatus.preview,
         Playability.local => TrackStatus.local,
+        Playability.external => TrackStatus.externalPlayer,
         Playability.none => TrackStatus.unavailable,
       };
     }
     if (t.originalUnavailable) return TrackStatus.originalUnavailable;
-    if (!t.isPlayable) return TrackStatus.unavailable;
+    if (!t.isPlayable) {
+      if (t.display.isExternal) return TrackStatus.externalPlayer;
+      final source = ref.read(sourceByIdProvider(t.display.sourceId));
+      if (source != null && source.info.kind == SourceKind.metadata) {
+        return TrackStatus.metadataOnly;
+      }
+      if (source != null && source.info.perTrackLicence && t.display.license.isEmpty) {
+        return TrackStatus.licenceNotVerified;
+      }
+      return TrackStatus.unavailable;
+    }
     final best = t.best;
     if (best.isLocal) return TrackStatus.local;
-    if (t.verifiedIds.contains(best.id)) {
-      return best.isPreview ? TrackStatus.preview : TrackStatus.full;
-    }
+    if (best.isPreview) return TrackStatus.preview;
+    if (ledger.hasPlayed(best.id)) return TrackStatus.full;
+    if (t.verifiedIds.contains(best.id)) return TrackStatus.unverified;
     final check = ref.watch(streamCheckProvider(best));
     return check.when(
       loading: () => TrackStatus.checking,
       error: (_, _) => TrackStatus.unavailable,
       data: (c) => switch (c.status) {
-        StreamStatus.playable => best.isPreview ? TrackStatus.preview : TrackStatus.full,
+        // Stream answered with audio; not yet played → still "Not verified".
+        StreamStatus.playable => TrackStatus.unverified,
         StreamStatus.unavailable => TrackStatus.unavailable,
-        // Could not confirm (timeout / server error): don't hide it, but
-        // don't promise either.
         StreamStatus.unknown => TrackStatus.unverified,
       },
     );

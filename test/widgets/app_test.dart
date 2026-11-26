@@ -85,8 +85,10 @@ void main() {
 
     expect(find.text('Fixture Night Drive'), findsOneWidget);
     expect(find.text('Fixture Catalogue Only'), findsOneWidget);
-    expect(find.text('Not streamable'), findsOneWidget);
-    expect(find.text('Full track'), findsOneWidget, reason: 'verified stream');
+    expect(find.text('Metadata only'), findsOneWidget, reason: 'catalogue (iTunes) row');
+    // Stream answered the HTTP check but has not played yet → not "Full track".
+    expect(find.text('Not verified'), findsOneWidget, reason: 'reachable stream, not yet played');
+    expect(find.text('Full track'), findsNothing);
     expect(find.textContaining('Fake audius'), findsWidgets, reason: 'provider name is shown');
 
     // Tapping a catalogue-only song with no authorised stream explains why

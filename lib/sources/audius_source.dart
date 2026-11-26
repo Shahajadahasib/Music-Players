@@ -28,6 +28,9 @@ class AudiusSource extends MusicSource {
     commercialStatus: CommercialStatus.permitted,
     attribution: 'Streaming via Audius',
     homepage: 'https://audius.co',
+    kind: SourceKind.fullTrack,
+    capabilities: {SourceCapability.metadata, SourceCapability.artwork, SourceCapability.fullTrackStream, SourceCapability.artistInfo},
+    perTrackLicence: false,
   );
 
   @override

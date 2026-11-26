@@ -17,6 +17,7 @@ class HiveStorageService {
   static const String settingsBoxName = 'settings_box';
   static const String historyBoxName = 'history_box';
   static const String matchMemoryBoxName = 'match_memory_box';
+  static const String playedBoxName = 'played_box';
 
   /// Maximum playback-history entries kept on device.
   static const int historyLimit = 500;
@@ -39,6 +40,7 @@ class HiveStorageService {
       Hive.openBox<dynamic>(settingsBoxName),
       Hive.openBox<Map<dynamic, dynamic>>(historyBoxName),
       Hive.openBox<String>(matchMemoryBoxName),
+      Hive.openBox<int>(playedBoxName),
     ]);
 
     await _clearLegacyDemoSongsIfNeeded();
@@ -295,6 +297,20 @@ class HiveStorageService {
   static Future<void> rememberMatch(String key, String songId) =>
       Hive.box<String>(matchMemoryBoxName).put(key, songId);
 
+  // ── Playback ledger (recordings that actually played) ───────────────────
+
+  static Box<int> get _playedBox => Hive.box<int>(playedBoxName);
+
+  static DateTime? playedAt(String songId) {
+    final ms = _playedBox.get(songId);
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
+  static Future<void> markPlayed(String songId, DateTime at) =>
+      _playedBox.put(songId, at.millisecondsSinceEpoch);
+
+  static Future<void> unmarkPlayed(String songId) => _playedBox.delete(songId);
+
   /// Erases everything stored on this device (Settings → Delete my data).
   static Future<void> clearAllUserData() async {
     await Future.wait([
@@ -303,6 +319,7 @@ class HiveStorageService {
       _historyBox.clear(),
       _settingsBox.clear(),
       Hive.box<String>(matchMemoryBoxName).clear(),
+      _playedBox.clear(),
     ]);
     await _userDataBox.put(userDataKey, const UserData(favorites: []));
   }
