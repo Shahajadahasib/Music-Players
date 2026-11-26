@@ -72,6 +72,53 @@ class AudiusSource extends MusicSource {
     return _fetch(_uri('/v1/playlists/$albumId/tracks'));
   }
 
+  /// Artists (Audius users) matching [name], most-followed first.
+  Future<List<AudiusArtist>> searchArtists(String name, {int limit = 10}) async {
+    final q = name.trim();
+    if (q.isEmpty) return const [];
+    final Map<String, dynamic> body;
+    try {
+      body = await _client.get(_uri('/v1/users/search', {'query': q, 'limit': '${limit.clamp(1, 50)}'}));
+    } on ApiException catch (e) {
+      throw SourceException(id, e.message, statusCode: e.statusCode);
+    }
+    return parseArtists(body);
+  }
+
+  /// One track by id (null when removed, gated or not streamable).
+  Future<Song?> trackById(String trackId) async {
+    if (trackId.isEmpty) return null;
+    final Map<String, dynamic> body;
+    try {
+      body = await _client.get(_uri('/v1/tracks/$trackId'));
+    } on ApiException catch (e) {
+      if (e.isNotFound) return null;
+      throw SourceException(id, e.message, statusCode: e.statusCode);
+    }
+    final data = body['data'];
+    return data is Map<String, dynamic> ? parseTrack(data, host: _host) : null;
+  }
+
+  static List<AudiusArtist> parseArtists(Map<String, dynamic> body) {
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    final out = <AudiusArtist>[];
+    for (final u in raw.whereType<Map<String, dynamic>>()) {
+      final id = u['id']?.toString() ?? '';
+      final name = (u['name'] as String? ?? '').trim();
+      if (id.isEmpty || name.isEmpty) continue;
+      out.add(AudiusArtist(
+        id: id,
+        name: name,
+        handle: (u['handle'] as String? ?? '').trim(),
+        followers: (u['follower_count'] as num?)?.toInt() ?? 0,
+        verified: u['is_verified'] == true,
+      ));
+    }
+    out.sort((a, b) => b.followers.compareTo(a.followers));
+    return out;
+  }
+
   Future<List<Song>> _fetch(Uri uri) async {
     final Map<String, dynamic> body;
     try {
@@ -138,6 +185,10 @@ class AudiusSource extends MusicSource {
           ? 'https://audius.co$permalink'
           : '',
       artistId: artistId,
+      // Artist-declared licence (e.g. "All rights reserved", a CC licence).
+      // Streaming in third-party apps is governed by the Audius API Terms.
+      license: (json['license'] as String?)?.trim() ?? '',
+      isrc: (json['isrc'] as String?)?.trim() ?? '',
     );
   }
 
@@ -160,4 +211,22 @@ class AudiusSource extends MusicSource {
     }
     return null;
   }
+}
+
+class AudiusArtist {
+  const AudiusArtist({
+    required this.id,
+    required this.name,
+    required this.handle,
+    required this.followers,
+    required this.verified,
+  });
+
+  final String id;
+  final String name;
+  final String handle;
+  final int followers;
+
+  /// Audius-verified account (the artist's own profile).
+  final bool verified;
 }

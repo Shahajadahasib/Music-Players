@@ -109,6 +109,7 @@ enum TrackStatus {
   licenceNotVerified,
   originalUnavailable,
   local,
+  liveRadio,
 }
 
 /// Badge for [TrackStatus] — every result says plainly whether it plays.
@@ -130,6 +131,7 @@ class StatusBadge extends StatelessWidget {
       TrackStatus.unavailable => ('Not streamable', p.textTertiary, Icons.block_rounded),
       TrackStatus.originalUnavailable => ('Not available', p.danger, Icons.block_rounded),
       TrackStatus.local => ('On device', p.accent, Icons.phone_iphone_rounded),
+      TrackStatus.liveRadio => ('Live radio', p.accentWarm, Icons.sensors_rounded),
     };
     return Semantics(
       label: label,

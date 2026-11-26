@@ -7,6 +7,8 @@ import '../playback/stream_verifier.dart';
 import '../sources/music_source.dart';
 import 'matched_track.dart';
 import 'text_normalizer.dart';
+import 'artist_aliases.dart';
+import 'provider_health.dart';
 import 'track_matcher.dart';
 
 /// Remembers which provider track successfully played for a given song so the
@@ -82,12 +84,15 @@ class SearchAggregator {
     this.negativeDiscoveryTtl = const Duration(minutes: 10),
     this.cacheSize = 60,
     this.specificSongRelevance = 0.75,
+    this.discoveryTarget = 20,
+    ProviderHealth? health,
     Map<String, RateLimiter>? rateLimits,
     DateTime Function()? clock,
   })  : _sources = sources,
         memory = memory ?? InMemoryMatchMemory(),
         _clock = clock ?? DateTime.now,
-        _limits = rateLimits ?? defaultRateLimits(clock) {
+        _limits = rateLimits ?? defaultRateLimits(clock),
+        health = health ?? ProviderHealth(clock: clock) {
     this.verifier = verifier ?? TrustingStreamVerifier(_sourceById);
   }
 
@@ -112,6 +117,13 @@ class SearchAggregator {
   /// Relevance at which the top catalogue result is treated as "the song the
   /// user asked for" (enables exact-original discovery).
   final double specificSongRelevance;
+
+  /// Open (discovery) searches keep asking further providers, one at a time,
+  /// until this many relevant playable results are collected.
+  final int discoveryTarget;
+
+  /// Circuit breaker: providers that keep failing are paused briefly.
+  final ProviderHealth health;
   final DateTime Function() _clock;
   final Map<String, RateLimiter> _limits;
 
@@ -133,8 +145,14 @@ class SearchAggregator {
     return null;
   }
 
-  List<MusicSource> get _catalogueSources => [for (final s in _sources()) if (!s.info.fullTracks) s];
-  List<MusicSource> get _playableSources => [for (final s in _sources()) if (s.info.fullTracks) s];
+  // A provider's *kind* decides its role: metadata and external-player
+  // providers are never audio sources, radio never takes part in song search.
+  List<MusicSource> get _catalogueSources =>
+      [for (final s in _sources()) if (s.info.kind == SourceKind.metadata) s];
+  List<MusicSource> get _playableSources =>
+      [for (final s in _sources()) if (s.info.kind == SourceKind.fullTrack) s];
+  List<MusicSource> get _externalSources =>
+      [for (final s in _sources()) if (s.info.kind == SourceKind.externalPlayer) s];
 
   void clearCache() {
     _cache.clear();
@@ -151,6 +169,13 @@ class SearchAggregator {
     String query,
     int limit,
   ) async {
+    if (health.isPaused(s.id)) {
+      return (
+        songs: const <Song>[],
+        failure: ProviderAttempt(s.id, AttemptOutcome.paused,
+            detail: '${s.info.displayName} is temporarily paused after repeated failures'),
+      );
+    }
     final limiter = _limits[s.id];
     if (limiter != null && !limiter.tryAcquire()) {
       return (
@@ -161,9 +186,11 @@ class SearchAggregator {
     }
     try {
       final songs = await s.searchTracks(query, limit: limit).timeout(perSourceTimeout);
+      health.recordSuccess(s.id);
       return (songs: songs, failure: null);
     } on TimeoutException {
       _logFailure(s.id, 'timeout after ${perSourceTimeout.inSeconds}s');
+      health.recordFailure(s.id, 'timeout');
       return (
         songs: const <Song>[],
         failure: ProviderAttempt(s.id, AttemptOutcome.timeout,
@@ -171,6 +198,7 @@ class SearchAggregator {
       );
     } on SourceException catch (e) {
       _logFailure(s.id, e);
+      if (!e.isRateLimited) health.recordFailure(s.id, e.message);
       return (
         songs: const <Song>[],
         failure: ProviderAttempt(
@@ -183,6 +211,7 @@ class SearchAggregator {
       );
     } catch (e, st) {
       _logFailure(s.id, e, st);
+      health.recordFailure(s.id, '$e');
       return (
         songs: const <Song>[],
         failure: ProviderAttempt(s.id, AttemptOutcome.error,
@@ -302,16 +331,25 @@ class SearchAggregator {
     bool cancelled() => isCancelled?.call() ?? false;
     final attempts = <ProviderAttempt>[];
 
+    // Spellings to try: the query as typed, then (only if needed) the same
+    // query with a known artist in the other script / a transliteration.
+    final variants = ArtistAliases.queryVariants(query);
+
     // 1. Authoritative metadata, independent of playback discovery.
     final catalogue = <Song>[];
     for (final s in _catalogueSources) {
-      if (cancelled()) break;
-      final r = await _ask(s, query, perSource);
-      if (r.failure != null) {
-        attempts.add(r.failure!);
-      } else {
+      for (final v in variants) {
+        if (cancelled()) break;
+        final r = await _ask(s, v, perSource);
+        if (r.failure != null) {
+          attempts.add(r.failure!);
+          break;
+        }
         catalogue.addAll(r.songs);
-        attempts.add(ProviderAttempt(s.id, r.songs.isEmpty ? AttemptOutcome.noMatch : AttemptOutcome.results));
+        final useful = r.songs.any((x) => matcher.relevance(query, x) >= 0.45);
+        attempts.add(ProviderAttempt(s.id, useful ? AttemptOutcome.results : AttemptOutcome.noMatch,
+            detail: v == query ? '' : 'as "$v"'));
+        if (useful) break; // other spellings not needed
       }
     }
 
@@ -321,37 +359,50 @@ class SearchAggregator {
     // 3. Full-track providers, one at a time.
     final playable = <List<Song>>[];
     Song? verifiedOriginal;
+    var relevantCount = 0;
+    providers:
     for (final s in _playableSources) {
-      if (cancelled()) {
-        return AggregatedSearchResult(query: query, tracks: const [], attempts: attempts, cancelled: true);
-      }
-      final r = await _ask(s, query, perSource);
-      if (r.failure != null) {
-        attempts.add(r.failure!);
-        continue;
-      }
-      playable.add(r.songs);
-      if (reference != null) {
-        final exact = _exactMatches(reference, r.songs, query: query);
-        if (exact.isEmpty) {
-          attempts.add(ProviderAttempt(s.id, AttemptOutcome.noMatch));
-          continue;
+      for (final v in variants) {
+        if (cancelled()) {
+          return AggregatedSearchResult(query: query, tracks: const [], attempts: attempts, cancelled: true);
         }
-        final v = await _firstVerified(exact);
-        if (v.song != null) {
-          verifiedOriginal = v.song;
-          attempts.add(ProviderAttempt(s.id, AttemptOutcome.verified, detail: v.song!.id));
-          break; // exact original found: do not ask later providers
+        final r = await _ask(s, v, perSource);
+        if (r.failure != null) {
+          attempts.add(r.failure!);
+          continue providers;
         }
-        attempts.add(ProviderAttempt(s.id, AttemptOutcome.unplayable, detail: v.detail));
-      } else {
-        final relevant = r.songs.where((x) => x.canPlay && matcher.relevance(query, x) >= 0.45);
-        if (relevant.isNotEmpty) {
-          attempts.add(ProviderAttempt(s.id, AttemptOutcome.results));
-          break; // free-text query answered
+        playable.add(r.songs);
+        final note = v == query ? '' : 'as "$v"';
+        if (reference != null) {
+          final exact = _exactMatches(reference, r.songs, query: query);
+          if (exact.isEmpty) {
+            attempts.add(ProviderAttempt(s.id, AttemptOutcome.noMatch, detail: note));
+            continue; // try the next spelling, then the next provider
+          }
+          final vr = await _firstVerified(exact);
+          if (vr.song != null) {
+            verifiedOriginal = vr.song;
+            attempts.add(ProviderAttempt(s.id, AttemptOutcome.verified, detail: vr.song!.id));
+            break providers; // exact original found: do not ask later providers
+          }
+          attempts.add(ProviderAttempt(s.id, AttemptOutcome.unplayable, detail: vr.detail));
+          continue providers;
+        } else {
+          final relevant = r.songs.where((x) => x.canPlay && matcher.relevance(query, x) >= 0.45).length;
+          relevantCount += relevant;
+          attempts.add(ProviderAttempt(s.id, relevant > 0 ? AttemptOutcome.results : AttemptOutcome.noMatch,
+              detail: note));
+          if (relevantCount >= discoveryTarget) break providers; // enough for a useful list
+          if (relevant > 0) continue providers; // this spelling worked for this provider
         }
-        attempts.add(ProviderAttempt(s.id, AttemptOutcome.noMatch));
       }
+    }
+
+    // 4. No authorised in-app stream of the named original: offer its
+    //    official external player (e.g. YouTube), if one is configured.
+    Song? external;
+    if (reference != null && verifiedOriginal == null && !cancelled()) {
+      external = await _findExternal(reference, query, attempts);
     }
 
     final tracks = rank(
@@ -360,6 +411,7 @@ class SearchAggregator {
       _sources().map((s) => s.id).toList(),
       reference: reference,
       verifiedOriginal: verifiedOriginal,
+      external: external,
     );
     return AggregatedSearchResult(
       query: query,
@@ -446,6 +498,7 @@ class SearchAggregator {
     List<String> sourceOrder, {
     Song? reference,
     Song? verifiedOriginal,
+    Song? external,
   }) {
     // Interleave so every provider's top hits are considered first.
     final interleaved = <({Song song, int rank})>[];
@@ -492,7 +545,8 @@ class SearchAggregator {
 
     final scored = <({MatchedTrack track, double score})>[];
     for (final c in clusters) {
-      final track = _toMatched(query, c, sourceOrder, verifiedOriginal: verifiedOriginal);
+      final track = _toMatched(query, c, sourceOrder,
+          verifiedOriginal: verifiedOriginal, external: c.isReference ? external : null);
       final availability = track.hasFullTrack
           ? 0.25
           : track.previewOnly
@@ -516,6 +570,7 @@ class SearchAggregator {
     _Cluster c,
     List<String> sourceOrder, {
     Song? verifiedOriginal,
+    Song? external,
   }) {
     final refs = c.songs.where((s) => !s.canPlay).toList();
     final catalogue = c.songs.where((s) => s.sourceId == 'itunes').toList();
@@ -542,6 +597,7 @@ class SearchAggregator {
       references: refs,
       relevance: relevance,
       isBestMatch: c.isReference,
+      externalOption: external,
       verifiedIds: {
         if (verifiedOriginal != null && playable.any((p) => p.id == verifiedOriginal.id))
           verifiedOriginal.id,
@@ -583,6 +639,7 @@ class SearchAggregator {
             alternates: v.alternates,
             attempts: v.attempts,
             fromCache: true,
+            external: v.external,
           ));
         }
         _discoveries.remove(key);
@@ -613,15 +670,25 @@ class SearchAggregator {
     final lookup = '${TextNormalizer.title(reference.title)} '
             '${TextNormalizer.artists(reference.artist).join(' ')}'
         .trim();
+    final lookups = ArtistAliases.queryVariants(lookup);
     for (final s in _playableSources) {
       if (skipSources.contains(s.id)) continue;
       if (isCancelled?.call() ?? false) break;
-      final r = await _ask(s, lookup, 25);
-      if (r.failure != null) {
-        attempts.add(r.failure!);
+      var exact = <Song>[];
+      ProviderAttempt? failure;
+      for (final l in lookups) {
+        final r = await _ask(s, l, 25);
+        if (r.failure != null) {
+          failure = r.failure;
+          break;
+        }
+        exact = _exactMatches(reference, r.songs, query: query, excludeIds: excludeIds);
+        if (exact.isNotEmpty) break; // other spellings not needed
+      }
+      if (failure != null) {
+        attempts.add(failure);
         continue;
       }
-      final exact = _exactMatches(reference, r.songs, query: query, excludeIds: excludeIds);
       if (exact.isEmpty) {
         attempts.add(ProviderAttempt(s.id, AttemptOutcome.noMatch));
         continue;
@@ -638,7 +705,33 @@ class SearchAggregator {
       }
       attempts.add(ProviderAttempt(s.id, AttemptOutcome.unplayable, detail: v.detail));
     }
-    return Discovery(reference: reference, attempts: attempts);
+    final external = (isCancelled?.call() ?? false) ? null : await _findExternal(reference, query, attempts);
+    return Discovery(reference: reference, attempts: attempts, external: external);
+  }
+
+  /// Official external player for exactly [reference] (title + artist must
+  /// match, no unrequested versions). Asked only after every in-app source
+  /// failed, one provider at a time.
+  Future<Song?> _findExternal(Song reference, String query, List<ProviderAttempt> attempts) async {
+    for (final s in _externalSources) {
+      final r = await _ask(s, '${reference.title} ${reference.artist}', 8);
+      if (r.failure != null) {
+        attempts.add(r.failure!);
+        continue;
+      }
+      for (final c in r.songs) {
+        if (!c.isExternal) continue;
+        // External videos carry no duration; title + artist + version rules
+        // must still hold. Transliteration-only matches are not accepted.
+        final m = matcher.matchRecording(reference.copyWith(clearDuration: true), c, query: query);
+        if (m.isExact) {
+          attempts.add(ProviderAttempt(s.id, AttemptOutcome.external, detail: c.id));
+          return c;
+        }
+      }
+      attempts.add(ProviderAttempt(s.id, AttemptOutcome.noMatch));
+    }
+    return null;
   }
 
   /// Verified playable versions of [reference], best first (compatibility

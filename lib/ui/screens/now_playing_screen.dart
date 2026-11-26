@@ -6,6 +6,7 @@ import '../../licensing/license_controller.dart';
 import '../../models/song.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/source_providers.dart';
+import '../../sources/radio_source.dart';
 import '../../theme/aurora_theme.dart';
 import '../../utils/haptics.dart';
 import '../navigation.dart';
@@ -248,6 +249,14 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
     final known = max > 0;
     final value = (_dragValue ?? position.inMilliseconds.toDouble()).clamp(0.0, known ? max : 1.0);
     final shown = Duration(milliseconds: value.round());
+    final live = ref.watch(playerControllerProvider.select((s) => s.currentSong?.isRadio ?? false));
+    if (live) {
+      // Live broadcast: no length, no seeking.
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(child: StatusBadge(TrackStatus.liveRadio)),
+      );
+    }
 
     return Column(
       children: [

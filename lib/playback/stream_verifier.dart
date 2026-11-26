@@ -187,8 +187,10 @@ class HttpStreamVerifier implements StreamVerifier {
     } on TimeoutException {
       return StreamCheck(StreamStatus.unknown, uri: uri, reason: 'timeout');
     }
-    // Never download the body: two bytes were requested; drain and stop.
-    unawaited(res.stream.drain<void>().catchError((_) {}));
+    // Never read the body: servers that ignore Range (and live radio
+    // streams, which never end) would otherwise be downloaded in full.
+    // Cancelling the subscription closes the connection.
+    unawaited(res.stream.listen((_) {}, onError: (_) {}, cancelOnError: true).cancel());
     final code = res.statusCode;
     if (code == 401 || code == 402 || code == 403 || code == 404 || code == 410 || code == 451) {
       return StreamCheck(StreamStatus.unavailable, uri: uri, reason: 'HTTP $code');

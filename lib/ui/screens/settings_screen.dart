@@ -158,6 +158,14 @@ class SettingsScreen extends ConsumerWidget {
           _kv(context, 'Rebuffering events', '${diag.rebufferCount}'),
           _kv(context, 'Automatic source fallbacks', '${diag.fallbackCount}'),
           _kv(context, 'Tracks that could not play', '${diag.failedCount}'),
+          for (final e in ref.read(providerHealthProvider).all.entries)
+            _kv(
+              context,
+              ref.read(sourceByIdProvider(e.key))?.info.displayName ?? e.key,
+              ref.read(providerHealthProvider).isPaused(e.key)
+                  ? 'Paused after ${e.value.consecutiveFailures} failures'
+                  : '${e.value.successes} ok · ${e.value.failures} failed',
+            ),
 
           // ── About ───────────────────────────────────────────────────
           const SectionHeader('About'),
@@ -187,12 +195,13 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   static String _describe(SourceInfo i) {
-    final what = i.fullTracks
-        ? 'Full tracks'
-        : i.previews
-            ? 'Song info & previews'
-            : 'Song info';
-    return '$what · ${i.attribution}';
+    final what = switch (i.kind) {
+      SourceKind.fullTrack => 'Full tracks',
+      SourceKind.externalPlayer => 'Opens the official player',
+      SourceKind.radio => 'Live radio',
+      SourceKind.metadata => i.previews ? 'Song info & previews' : 'Song info only',
+    };
+    return '$what${i.experimental ? ' · experimental' : ''} · ${i.attribution}';
   }
 
   Widget _kv(BuildContext context, String k, String v) => Padding(

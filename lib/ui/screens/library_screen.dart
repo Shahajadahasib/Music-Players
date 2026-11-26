@@ -8,6 +8,7 @@ import '../../licensing/license_controller.dart';
 import '../../models/playlist.dart';
 import '../../models/song.dart';
 import '../../providers/player_provider.dart';
+import '../../providers/source_providers.dart';
 import '../../services/hive_storage_service.dart';
 import '../../services/local_music_service.dart';
 import '../../theme/aurora_theme.dart';
@@ -15,6 +16,7 @@ import '../navigation.dart';
 import '../widgets/common.dart';
 import '../widgets/song_actions.dart';
 import 'playlist_screen.dart';
+import 'radio_screen.dart';
 import 'song_list_screen.dart';
 
 /// Web: imported local files live only for the session.
@@ -107,6 +109,14 @@ class LibraryScreen extends ConsumerWidget {
                         ? importLocalMusic(context, ref)
                         : pushPage(context, SongListScreen.local()),
                   ),
+                  if (ref.watch(radioSourceProvider) != null)
+                    _LibraryTile(
+                      icon: Icons.radio_rounded,
+                      color: p.accentWarm,
+                      title: 'Live radio',
+                      subtitle: 'Stations from Bangladesh, India and worldwide',
+                      onTap: () => pushPage(context, const RadioScreen()),
+                    ),
                   SectionHeader(
                     'Playlists',
                     subtitle: isPremium || AppConfig.isPaidUpfront

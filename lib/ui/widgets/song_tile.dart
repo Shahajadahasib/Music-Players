@@ -6,6 +6,7 @@ import '../../playback/stream_verifier.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/source_providers.dart';
 import '../../sources/music_source.dart';
+import '../../sources/radio_source.dart';
 import '../../search/matched_track.dart';
 import '../../theme/aurora_theme.dart';
 import 'artwork_image.dart';
@@ -166,9 +167,10 @@ class SongTile extends ConsumerWidget {
   TrackStatus _status(WidgetRef ref) {
     final ledger = ref.read(playbackLedgerProvider);
     final t = track;
+    if (song.isRadio) return TrackStatus.liveRadio;
     if (t == null) {
       return switch (song.playability) {
-        Playability.full => TrackStatus.full,
+        Playability.full => ledger.hasPlayed(song.id) ? TrackStatus.full : TrackStatus.unverified,
         Playability.preview => TrackStatus.preview,
         Playability.local => TrackStatus.local,
         Playability.external => TrackStatus.externalPlayer,

@@ -13,7 +13,12 @@ class MatchedTrack {
     this.references = const [],
     this.isBestMatch = false,
     this.verifiedIds = const {},
+    this.externalOption,
   });
+
+  /// Official external player for this recording (e.g. YouTube) when no
+  /// authorised in-app stream exists. Never passed to the audio player.
+  final Song? externalOption;
 
   final Song display;
   final List<Song> candidates;
@@ -105,7 +110,8 @@ class ProviderAttempt {
   bool get isFailure =>
       outcome == AttemptOutcome.timeout ||
       outcome == AttemptOutcome.error ||
-      outcome == AttemptOutcome.rateLimited;
+      outcome == AttemptOutcome.rateLimited ||
+      outcome == AttemptOutcome.paused;
 
   @override
   String toString() => '$sourceId: ${outcome.name}${detail.isEmpty ? '' : ' ($detail)'}';
@@ -126,6 +132,12 @@ enum AttemptOutcome {
   timeout,
   rateLimited,
   error,
+
+  /// Skipped: the provider failed repeatedly and is paused (circuit open).
+  paused,
+
+  /// Found an official external player for the recording.
+  external,
 }
 
 /// Outcome of looking for an authorised full-track source of one recording.
@@ -136,9 +148,13 @@ class Discovery {
     this.alternates = const [],
     this.attempts = const [],
     this.fromCache = false,
+    this.external,
   });
 
   final Song reference;
+
+  /// Official external player when no in-app stream exists.
+  final Song? external;
 
   /// Verified exact recording to play, or null when none exists.
   final Song? playable;

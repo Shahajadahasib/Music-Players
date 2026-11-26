@@ -285,28 +285,30 @@ class _Results extends ConsumerWidget {
                   color: palette.danger.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                    Text('Original recording unavailable.', style: context.text.titleMedium?.copyWith(fontSize: 14)),
+                    const SizedBox(height: 2),
+                    Text(
+                      'None of the authorised streaming sources has this exact recording. '
+                      'Other songs below are different recordings.',
+                      style: context.text.bodySmall,
+                    ),
+                    if (_officialLinks(best).isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 4,
                         children: [
-                          Text('Original recording unavailable.',
-                              style: context.text.titleMedium?.copyWith(fontSize: 14)),
-                          const SizedBox(height: 2),
-                          Text(
-                            'None of the authorised streaming sources has this exact recording. '
-                            'Other songs below are different recordings.',
-                            style: context.text.bodySmall,
-                          ),
+                          for (final l in _officialLinks(best))
+                            TextButton.icon(
+                              icon: Icon(l.icon, size: 18),
+                              label: Text(l.label == 'provider page' ? 'Open' : l.label),
+                              onPressed: () => openExternal(context, l.url),
+                            ),
                         ],
                       ),
-                    ),
-                    if (best.externalUrl.startsWith('https://'))
-                      TextButton(
-                        onPressed: () => openExternal(context, best.externalUrl),
-                        child: Text(best.display.sourceId == 'itunes' ? 'Apple Music' : 'Open'),
-                      ),
+                    ],
                   ],
                 ),
               ),
@@ -334,7 +336,13 @@ class _Results extends ConsumerWidget {
         song: t.display,
         track: t,
         onTap: () async {
-          final hasLink = t.externalUrl.isNotEmpty;
+          // Official external players open in their own app / page; their
+          // URLs never reach the in-app audio player.
+          if (t.display.isExternal) {
+            openExternal(context, t.display.externalUrl);
+            return;
+          }
+          final hasLink = _officialLinks(t).isNotEmpty;
           // Plays only this recording: never queues or substitutes others.
           final ok = await ref
               .read(playerControllerProvider.notifier)
@@ -358,9 +366,27 @@ class _Results extends ConsumerWidget {
           AttemptOutcome.rateLimited => ' (rate limited)',
           AttemptOutcome.error => ' (unavailable)',
           AttemptOutcome.results => '',
+          AttemptOutcome.paused => ' (paused)',
+          AttemptOutcome.external => ' (official player)',
         }}',
     ];
     return 'Checked: ${parts.join(', ')}.';
+  }
+
+  /// Official places to listen when no authorised in-app stream exists:
+  /// the catalogue's store page and/or the official YouTube player.
+  static List<({String label, String url, IconData icon})> _officialLinks(MatchedTrack t) {
+    final links = <({String label, String url, IconData icon})>[];
+    final store = t.externalUrl;
+    if (store.startsWith('https://')) {
+      final apple = t.display.sourceId == 'itunes' || t.references.any((r) => r.sourceId == 'itunes');
+      links.add((label: apple ? 'Apple Music' : 'provider page', url: store, icon: Icons.open_in_new_rounded));
+    }
+    final yt = t.externalOption;
+    if (yt != null && yt.externalUrl.startsWith('https://')) {
+      links.add((label: 'YouTube', url: yt.externalUrl, icon: Icons.smart_display_rounded));
+    }
+    return links;
   }
 
   void _offerExternal(BuildContext context, WidgetRef ref, MatchedTrack t) {
@@ -374,13 +400,14 @@ class _Results extends ConsumerWidget {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d), child: const Text('Close')),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(d);
-              openExternal(context, t.externalUrl);
-            },
-            child: Text(t.display.sourceId == 'itunes' ? 'Open in Apple Music' : 'Open'),
-          ),
+          for (final l in _officialLinks(t))
+            FilledButton.tonal(
+              onPressed: () {
+                Navigator.pop(d);
+                openExternal(context, l.url);
+              },
+              child: Text('Open in ${l.label}'),
+            ),
         ],
       ),
     );

@@ -175,14 +175,24 @@ void main() {
   });
 
   group('free-text search', () {
-    test('stops after the first provider with relevant results', () async {
+    test('discovery searches gather results across providers, one at a time', () async {
       final audius = FakeSource('audius', results: [song('l1', title: 'Lofi Morning', artist: 'Beats', sourceId: 'audius')]);
       final archive = FakeSource('archive', results: [song('l2', title: 'Lofi Night', artist: 'X', sourceId: 'archive')]);
       final agg = SearchAggregator(sources: () => [audius, archive], verifier: FakeVerifier());
       final r = await agg.search('lofi');
-      expect(archive.calls, 0);
+      expect([audius.calls, archive.calls], [1, 1], reason: 'one result is not enough for a useful list');
       expect(r.bestMatch, isNull);
-      expect(r.tracks.single.display.id, 'l1');
+      expect(r.tracks.map((t) => t.display.id), containsAll(['l1', 'l2']));
+    });
+
+    test('discovery stops once enough results are collected (no extra requests)', () async {
+      final audius = FakeSource('audius', results: [
+        for (var i = 0; i < 5; i++) song('l$i', title: 'Lofi Mix $i', artist: 'Beats $i', sourceId: 'audius'),
+      ]);
+      final archive = FakeSource('archive', results: [song('x', title: 'Lofi Night', artist: 'X', sourceId: 'archive')]);
+      final agg = SearchAggregator(sources: () => [audius, archive], verifier: FakeVerifier(), discoveryTarget: 5);
+      await agg.search('lofi');
+      expect(archive.calls, 0);
     });
 
     test('asks the next provider when the first has nothing relevant', () async {

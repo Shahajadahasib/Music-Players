@@ -227,6 +227,10 @@ void main() {
     await _settle(t);
 
     await t.scrollUntilVisible(find.text('Regression Mix'), 200, scrollable: find.byType(Scrollable).last);
+    // scrollUntilVisible stops once the row is *built* (cache extent);
+    // bring it fully on screen before tapping.
+    await t.ensureVisible(find.text('Regression Mix'));
+    await _settle(t);
     await t.tap(find.text('Regression Mix'));
     await _settle(t);
     expect(find.text('Playlist Fixture Song'), findsOneWidget);
